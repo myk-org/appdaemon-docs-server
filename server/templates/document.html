@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }} - AppDaemon Documentation</title>
+    <link href="/api/css/pygments.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10.6.1/dist/mermaid.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            background-color: #f8f9fa;
+            color: #333;
+            font-feature-settings: "liga" 1, "kern" 1;
+            text-rendering: optimizeLegibility;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .header {
+            border-bottom: 2px solid #e9ecef;
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }
+        .breadcrumb {
+            font-size: 1em;
+            color: #6c757d;
+            margin-bottom: 10px;
+        }
+        .breadcrumb a {
+            color: #3498db;
+            text-decoration: none;
+        }
+        .breadcrumb a:hover {
+            text-decoration: underline;
+        }
+        h1 {
+            color: #2c3e50;
+            margin: 0;
+            font-size: 2.2em;
+        }
+        .content h1 {
+            color: #2c3e50;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+            margin-top: 30px;
+            margin-bottom: 20px;
+        }
+        .content h2 {
+            color: #34495e;
+            border-bottom: 1px solid #bdc3c7;
+            padding-bottom: 5px;
+            margin-top: 25px;
+            margin-bottom: 15px;
+        }
+        .content h3 {
+            color: #34495e;
+            margin-top: 20px;
+            margin-bottom: 10px;
+        }
+        .content pre {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 4px;
+            padding: 15px;
+            overflow-x: auto;
+            font-size: 0.9em;
+        }
+        .content code {
+            background: #f8f9fa;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.95em;
+            color: #e74c3c;
+        }
+        .content pre code {
+            background: none;
+            padding: 0;
+            color: inherit;
+        }
+        .content blockquote {
+            border-left: 4px solid #3498db;
+            margin: 20px 0;
+            padding: 10px 20px;
+            background: #f8f9fa;
+            color: #555;
+        }
+        .table-wrapper {
+            overflow-x: auto;
+            margin: 20px 0;
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
+            width: 100%;
+            max-width: 100%;
+        }
+        .content table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 0;
+            min-width: 800px; /* Increased for wide tables */
+            white-space: nowrap;
+        }
+        .content th,
+        .content td {
+            border: 1px solid #dee2e6;
+            padding: 12px;
+            text-align: left;
+            word-break: break-word;
+            overflow-wrap: break-word;
+        }
+        .content td:last-child {
+            white-space: normal; /* Allow wrapping in last column */
+        }
+        .content th {
+            background: #f8f9fa;
+            font-weight: 600;
+        }
+
+        /* Dark/Light Theme Toggle */
+        .theme-toggle {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            background: #3498db;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            cursor: pointer;
+            font-size: 18px;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        }
+        .theme-toggle:hover {
+            background: #2980b9;
+            transform: scale(1.1);
+        }
+
+        /* Dark Theme Styles */
+        [data-theme="dark"] {
+            background-color: #1a1a1a !important;
+            color: #e0e0e0 !important;
+        }
+        [data-theme="dark"] .container {
+            background: #2d2d2d !important;
+            color: #e0e0e0 !important;
+        }
+        [data-theme="dark"] .header {
+            border-bottom-color: #444 !important;
+        }
+        [data-theme="dark"] .breadcrumb {
+            color: #aaa !important;
+        }
+        [data-theme="dark"] .breadcrumb a {
+            color: #5dade2 !important;
+        }
+        [data-theme="dark"] h1,
+        [data-theme="dark"] .content h1,
+        [data-theme="dark"] .content h2,
+        [data-theme="dark"] .content h3 {
+            color: #f0f0f0 !important;
+            border-bottom-color: #5dade2 !important;
+        }
+        [data-theme="dark"] .content pre {
+            background: #1e1e1e !important;
+            border-color: #444 !important;
+            color: #e0e0e0 !important;
+        }
+        [data-theme="dark"] .content code {
+            background: #1e1e1e !important;
+            color: #f39c12 !important;
+        }
+        [data-theme="dark"] .content blockquote {
+            background: #1e1e1e !important;
+            border-left-color: #5dade2 !important;
+            color: #ccc !important;
+        }
+        [data-theme="dark"] .content table {
+            border-color: #444 !important;
+        }
+        [data-theme="dark"] .content th,
+        [data-theme="dark"] .content td {
+            border-color: #444 !important;
+        }
+        [data-theme="dark"] .content th {
+            background: #1e1e1e !important;
+            color: #e0e0e0 !important;
+        }
+        [data-theme="dark"] .toc {
+            background: #1e1e1e !important;
+            border-color: #444 !important;
+        }
+        [data-theme="dark"] .back-link {
+            background: #5dade2 !important;
+        }
+        [data-theme="dark"] .back-link:hover {
+            background: #3498db !important;
+        }
+
+        /* WebSocket Status Indicator */
+        .websocket-status {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1000;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            color: white;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            user-select: none;
+        }
+        .websocket-status.connected {
+            background: #28a745;
+        }
+        .websocket-status.connecting {
+            background: #ffc107;
+            color: #333;
+        }
+        .websocket-status.disconnected {
+            background: #dc3545;
+        }
+        .websocket-status.error {
+            background: #fd7e14;
+        }
+
+        /* Notification Toast */
+        .notification-toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1001;
+            max-width: 400px;
+            padding: 16px 20px;
+            background: #fff;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            transform: translateX(420px);
+            transition: transform 0.3s ease;
+        }
+        .notification-toast.show {
+            transform: translateX(0);
+        }
+        .notification-toast.info {
+            border-left: 4px solid #17a2b8;
+        }
+        .notification-toast.success {
+            border-left: 4px solid #28a745;
+        }
+        .notification-toast.warning {
+            border-left: 4px solid #ffc107;
+        }
+        .notification-toast.error {
+            border-left: 4px solid #dc3545;
+        }
+        .notification-title {
+            font-weight: 600;
+            margin-bottom: 4px;
+            font-size: 14px;
+        }
+        .notification-message {
+            font-size: 13px;
+            color: #666;
+            line-height: 1.4;
+        }
+        .notification-close {
+            position: absolute;
+            top: 8px;
+            right: 12px;
+            background: none;
+            border: none;
+            font-size: 16px;
+            cursor: pointer;
+            color: #999;
+        }
+
+        /* Dark theme for WebSocket UI */
+        [data-theme="dark"] .notification-toast {
+            background: #2d2d2d !important;
+            border-color: #444 !important;
+            color: #e0e0e0 !important;
+        }
+        [data-theme="dark"] .notification-message {
+            color: #ccc !important;
+        }
+
+        /* Document refresh indicator */
+        .refresh-indicator {
+            position: fixed;
+            bottom: 70px;
+            right: 20px;
+            z-index: 1000;
+            background: #28a745;
+            color: white;
+            border: none;
+            border-radius: 20px;
+            padding: 8px 16px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            display: none;
+            transition: all 0.3s ease;
+            user-select: none;
+        }
+        .refresh-indicator.show {
+            display: block;
+        }
+        .refresh-indicator:hover {
+            background: #218838;
+            transform: scale(1.05);
+        }
+        .content ul,
+        .content ol {
+            padding-left: 25px;
+        }
+        .content li {
+            margin-bottom: 8px;
+        }
+        .content a {
+            color: #3498db;
+            text-decoration: none;
+        }
+        .content a:hover {
+            text-decoration: underline;
+        }
+        .toc {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .toc .toc-title {
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: #2c3e50;
+        }
+        .toc ul {
+            list-style: none;
+            padding-left: 0;
+        }
+        .toc li {
+            margin-bottom: 5px;
+        }
+        .toc a {
+            color: #3498db;
+            text-decoration: none;
+            font-size: 0.95em;
+        }
+        .toc a:hover {
+            text-decoration: underline;
+        }
+        .back-link {
+            display: inline-block;
+            margin-top: 30px;
+            padding: 10px 20px;
+            background: #3498db;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            transition: background-color 0.3s ease;
+        }
+        .back-link:hover {
+            background: #2980b9;
+        }
+
+        /* Syntax highlighting adjustments */
+        .highlight {
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+
+        /* Fix character rendering issues */
+        .content {
+            unicode-bidi: normal;
+            direction: ltr;
+        }
+
+        /* Handle special characters and symbols */
+        .content .highlight .err {
+            background-color: transparent !important;
+            border: none !important;
+            color: inherit !important;
+        }
+
+        /* Make code blocks responsive */
+        @media (max-width: 768px) {
+            .container {
+                padding: 20px;
+                margin: 10px;
+                max-width: none;
+            }
+            body {
+                padding: 10px;
+            }
+            .table-wrapper {
+                font-size: 0.9em;
+            }
+            .content table {
+                min-width: 600px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <button class="theme-toggle" id="themeToggle" title="Toggle Dark/Light Theme">🌙</button>
+
+    <!-- WebSocket Status Indicator -->
+    <div id="websocketStatus" class="websocket-status connecting" title="WebSocket Connection Status">
+        🔌 Connecting...
+    </div>
+
+    <!-- Document Refresh Indicator -->
+    <button id="refreshIndicator" class="refresh-indicator" title="Click to refresh document">
+        🔄 Document Updated
+    </button>
+
+    <!-- Notification Toast Container -->
+    <div id="notificationContainer"></div>
+
+    <div class="container">
+        <div class="header">
+            <div class="breadcrumb">
+                <a href="/docs/">📚 Documentation</a> / {{ filename }}
+            </div>
+            <h1>{{ title }}</h1>
+        </div>
+
+        <div class="content">
+            {{ content | safe }}
+        </div>
+
+        <a href="/docs/" class="back-link">← Back to Documentation Index</a>
+    </div>
+
+    <script>
+        // WebSocket Real-time Updates for Document Page
+        class DocumentWebSocket {
+            constructor() {
+                this.ws = null;
+                this.reconnectAttempts = 0;
+                this.maxReconnectAttempts = 5;
+                this.reconnectDelay = 1000;
+                this.statusElement = document.getElementById('websocketStatus');
+                this.refreshElement = document.getElementById('refreshIndicator');
+                this.notificationContainer = document.getElementById('notificationContainer');
+                this.currentDocument = '{{ filename }}';
+                this.documentNeedsRefresh = false;
+
+                this.setupRefreshHandler();
+                this.connect();
+            }
+
+            setupRefreshHandler() {
+                if (this.refreshElement) {
+                    this.refreshElement.addEventListener('click', () => {
+                        window.location.reload();
+                    });
+                }
+            }
+
+            connect() {
+                try {
+                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    const wsUrl = `${protocol}//${window.location.host}/ws`;
+
+                    this.updateStatus('connecting', '🔌 Connecting...');
+                    this.ws = new WebSocket(wsUrl);
+
+                    this.ws.onopen = () => {
+                        console.log('WebSocket connected');
+                        this.updateStatus('connected', '🟢 Live Updates');
+                        this.reconnectAttempts = 0;
+
+                        // Send client info
+                        this.send({
+                            type: 'client_info',
+                            data: {
+                                page: 'document',
+                                document: this.currentDocument,
+                                user_agent: navigator.userAgent,
+                                timestamp: Date.now()
+                            }
+                        });
+                    };
+
+                    this.ws.onmessage = (event) => {
+                        try {
+                            const data = JSON.parse(event.data);
+                            this.handleMessage(data);
+                        } catch (error) {
+                            console.error('Error parsing WebSocket message:', error);
+                        }
+                    };
+
+                    this.ws.onclose = () => {
+                        console.log('WebSocket disconnected');
+                        this.updateStatus('disconnected', '🔴 Disconnected');
+                        this.handleReconnect();
+                    };
+
+                    this.ws.onerror = (error) => {
+                        console.error('WebSocket error:', error);
+                        this.updateStatus('error', '⚠️ Error');
+                    };
+
+                } catch (error) {
+                    console.error('Error creating WebSocket connection:', error);
+                    this.updateStatus('error', '⚠️ Error');
+                    this.handleReconnect();
+                }
+            }
+
+            handleMessage(data) {
+                console.log('WebSocket message:', data);
+
+                switch (data.event_type) {
+                    case 'connection_established':
+                        this.showNotification('success', 'Connected', 'Real-time updates are now active');
+                        break;
+
+                    case 'file_created':
+                    case 'file_modified':
+                    case 'file_deleted':
+                        this.handleFileChange(data);
+                        break;
+
+                    case 'doc_generation_started':
+                        this.showNotification('info', 'Documentation Update', 'Documentation generation in progress...');
+                        break;
+
+                    case 'doc_generation_completed':
+                        this.showNotification('success', 'Documentation Updated', 'Documentation has been regenerated');
+                        if (this.documentNeedsRefresh) {
+                            this.showRefreshIndicator();
+                        }
+                        break;
+
+                    case 'doc_generation_error':
+                        this.showNotification('error', 'Generation Error', data.data.message || 'Documentation generation failed');
+                        break;
+
+                    case 'batch_started':
+                        this.showNotification('info', 'Batch Processing', data.data.message);
+                        break;
+
+                    case 'batch_completed':
+                        this.showNotification('success', 'Batch Complete', data.data.message);
+                        if (this.documentNeedsRefresh) {
+                            this.showRefreshIndicator();
+                        }
+                        break;
+
+                    case 'batch_error':
+                        this.showNotification('error', 'Batch Error', data.data.message);
+                        break;
+
+                    case 'ping':
+                        this.send({ type: 'pong', timestamp: Date.now() });
+                        break;
+
+                    case 'system_status':
+                        if (data.data.type === 'test_broadcast') {
+                            this.showNotification('info', 'Test Message', data.data.message);
+                        }
+                        break;
+                }
+            }
+
+            handleFileChange(data) {
+                const fileName = data.data.file_path ? data.data.file_path.split('/').pop() : 'Unknown file';
+                const action = data.event_type.replace('file_', '');
+
+                // Check if this change affects the current document
+                const isCurrentDocument = fileName === this.currentDocument ||
+                                         fileName === `${this.currentDocument}.md` ||
+                                         fileName.replace('.md', '') === this.currentDocument;
+
+                let title, message, type;
+                switch (action) {
+                    case 'created':
+                        title = 'File Created';
+                        message = `New documentation file: ${fileName}`;
+                        type = 'success';
+                        break;
+                    case 'modified':
+                        title = 'File Updated';
+                        message = isCurrentDocument ? 'This document has been updated' : `Documentation updated: ${fileName}`;
+                        type = 'info';
+                        break;
+                    case 'deleted':
+                        title = 'File Deleted';
+                        message = isCurrentDocument ? 'This document has been deleted' : `Documentation removed: ${fileName}`;
+                        type = 'warning';
+                        break;
+                }
+
+                this.showNotification(type, title, message);
+
+                if (isCurrentDocument) {
+                    this.documentNeedsRefresh = true;
+                    if (action === 'modified') {
+                        this.showRefreshIndicator();
+                    } else if (action === 'deleted') {
+                        // Document was deleted, redirect to index after a delay
+                        setTimeout(() => {
+                            window.location.href = '/docs/';
+                        }, 3000);
+                    }
+                }
+            }
+
+            showRefreshIndicator() {
+                if (this.refreshElement) {
+                    this.refreshElement.classList.add('show');
+                }
+            }
+
+            hideRefreshIndicator() {
+                if (this.refreshElement) {
+                    this.refreshElement.classList.remove('show');
+                }
+            }
+
+            showNotification(type, title, message, duration = 4000) {
+                const toast = document.createElement('div');
+                toast.className = `notification-toast ${type}`;
+                toast.innerHTML = `
+                    <button class="notification-close" onclick="this.parentElement.remove()">×</button>
+                    <div class="notification-title">${title}</div>
+                    <div class="notification-message">${message}</div>
+                `;
+
+                this.notificationContainer.appendChild(toast);
+
+                // Trigger animation
+                setTimeout(() => toast.classList.add('show'), 10);
+
+                // Auto-remove after duration
+                setTimeout(() => {
+                    toast.classList.remove('show');
+                    setTimeout(() => toast.remove(), 300);
+                }, duration);
+            }
+
+            updateStatus(status, text) {
+                if (this.statusElement) {
+                    this.statusElement.className = `websocket-status ${status}`;
+                    this.statusElement.textContent = text;
+                    this.statusElement.title = `WebSocket: ${status}`;
+                }
+            }
+
+            send(data) {
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.send(JSON.stringify(data));
+                }
+            }
+
+            handleReconnect() {
+                if (this.reconnectAttempts < this.maxReconnectAttempts) {
+                    this.reconnectAttempts++;
+                    const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
+
+                    this.updateStatus('connecting', `🔄 Reconnecting... (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+
+                    setTimeout(() => {
+                        this.connect();
+                    }, delay);
+                } else {
+                    this.updateStatus('disconnected', '🔴 Connection failed');
+                    this.showNotification('error', 'Connection Lost', 'Could not reconnect to live updates. Refresh the page to try again.');
+                }
+            }
+
+            disconnect() {
+                if (this.ws) {
+                    this.ws.close();
+                    this.ws = null;
+                }
+            }
+        }
+
+        // Initialize WebSocket connection
+        let documentWebSocket;
+        document.addEventListener('DOMContentLoaded', function() {
+            documentWebSocket = new DocumentWebSocket();
+        });
+
+        // Clean up on page unload
+        window.addEventListener('beforeunload', function() {
+            if (documentWebSocket) {
+                documentWebSocket.disconnect();
+            }
+        });
+
+        // Global function to render Mermaid diagrams
+        function renderMermaidDiagrams() {
+            // Clear existing diagrams
+            const existingDiagrams = document.querySelectorAll('.mermaid-diagram');
+            existingDiagrams.forEach(diagram => {
+                const hiddenCode = diagram.nextElementSibling;
+                if (hiddenCode && hiddenCode.style.display === 'none') {
+                    hiddenCode.style.display = 'block';
+                }
+                diagram.remove();
+            });
+
+            // Look for multiple possible selectors for Mermaid code blocks
+            let mermaidElements = document.querySelectorAll('code.language-mermaid, pre code.language-mermaid, code.mermaid, pre code.mermaid, .language-mermaid, .codehilite .language-mermaid');
+
+            // If no elements found with class selectors, look for content-based detection
+            if (mermaidElements.length === 0) {
+                const potentialMermaid = Array.from(document.querySelectorAll('code, pre code')).filter(el => {
+                    const content = el.textContent.trim();
+                    return content.startsWith('graph ') || content.startsWith('flowchart ') ||
+                           content.startsWith('sequenceDiagram') || content.startsWith('classDiagram') ||
+                           content.includes('-->') || content.includes('graph TD') || content.includes('graph LR');
+                });
+                mermaidElements = potentialMermaid;
+            }
+
+            mermaidElements.forEach((element, index) => {
+                const mermaidCode = element.textContent;
+                const mermaidId = `mermaid-${index}`;
+
+                // Get current theme
+                const currentTheme = document.body.getAttribute('data-theme') || 'light';
+
+                // Create a div to hold the rendered diagram
+                const mermaidDiv = document.createElement('div');
+                mermaidDiv.className = 'mermaid-diagram';
+                mermaidDiv.id = mermaidId;
+                mermaidDiv.style.textAlign = 'center';
+                mermaidDiv.style.margin = '20px 0';
+                mermaidDiv.style.background = currentTheme === 'dark' ? '#2d2d2d' : '#fff';
+                mermaidDiv.style.border = `1px solid ${currentTheme === 'dark' ? '#444' : '#dee2e6'}`;
+                mermaidDiv.style.borderRadius = '6px';
+                mermaidDiv.style.padding = '20px';
+
+                // Replace the code block with the diagram
+                const codeBlock = element.closest('pre') || element;
+                codeBlock.parentNode.insertBefore(mermaidDiv, codeBlock);
+                codeBlock.style.display = 'none';
+
+                // Render the diagram
+                mermaid.render(mermaidId + '-svg', mermaidCode).then(({svg}) => {
+                    mermaidDiv.innerHTML = svg;
+                }).catch((error) => {
+                    console.error('Mermaid rendering error:', error);
+                    mermaidDiv.innerHTML = `<p style="color: #e74c3c;">Error rendering diagram: ${error.message}</p>`;
+                });
+            });
+        }
+
+        // Initialize Mermaid and theme support
+        document.addEventListener('DOMContentLoaded', function() {
+            const themeToggle = document.getElementById('themeToggle');
+            const body = document.body;
+
+            // Configure initial Mermaid
+            mermaid.initialize({
+                startOnLoad: false,
+                theme: 'default',
+                themeVariables: {
+                    primaryColor: '#3498db',
+                    primaryTextColor: '#2c3e50',
+                    primaryBorderColor: '#2980b9',
+                    lineColor: '#34495e',
+                    sectionBkgColor: '#f8f9fa',
+                    altSectionBkgColor: '#e9ecef',
+                    gridColor: '#dee2e6',
+                    tertiaryColor: '#ecf0f1'
+                }
+            });
+
+            // Load saved theme or default to light
+            const savedTheme = localStorage.getItem('docs-theme') || 'light';
+            setTheme(savedTheme);
+
+            // Initial diagram render
+            renderMermaidDiagrams();
+
+            // Theme toggle event
+            themeToggle.addEventListener('click', function() {
+                const currentTheme = body.getAttribute('data-theme') || 'light';
+                const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+                setTheme(newTheme);
+                localStorage.setItem('docs-theme', newTheme);
+            });
+
+            function setTheme(theme) {
+                body.setAttribute('data-theme', theme);
+                themeToggle.textContent = theme === 'light' ? '🌙' : '☀️';
+                themeToggle.title = theme === 'light' ? 'Switch to Dark Theme' : 'Switch to Light Theme';
+
+                // Update Mermaid theme configuration
+                const mermaidTheme = theme === 'dark' ? 'dark' : 'default';
+                const themeVariables = theme === 'dark' ? {
+                    primaryColor: '#5dade2',
+                    primaryTextColor: '#e0e0e0',
+                    primaryBorderColor: '#3498db',
+                    lineColor: '#aaa',
+                    sectionBkgColor: '#2d2d2d',
+                    altSectionBkgColor: '#1e1e1e',
+                    gridColor: '#444',
+                    tertiaryColor: '#333'
+                } : {
+                    primaryColor: '#3498db',
+                    primaryTextColor: '#2c3e50',
+                    primaryBorderColor: '#2980b9',
+                    lineColor: '#34495e',
+                    sectionBkgColor: '#f8f9fa',
+                    altSectionBkgColor: '#e9ecef',
+                    gridColor: '#dee2e6',
+                    tertiaryColor: '#ecf0f1'
+                };
+
+                mermaid.initialize({
+                    startOnLoad: false,
+                    theme: mermaidTheme,
+                    themeVariables: themeVariables
+                });
+
+                // Re-render diagrams with new theme
+                renderMermaidDiagrams();
+            }
+        });
+
+        // Wrap tables for responsive scrolling
+        document.addEventListener('DOMContentLoaded', function() {
+            const content = document.querySelector('.content');
+            const tables = content.querySelectorAll('table');
+
+            tables.forEach(table => {
+                if (!table.parentElement.classList.contains('table-wrapper')) {
+                    const wrapper = document.createElement('div');
+                    wrapper.className = 'table-wrapper';
+                    table.parentNode.insertBefore(wrapper, table);
+                    wrapper.appendChild(table);
+                }
+            });
+        });
+
+        // Auto-generate table of contents if none exists
+        document.addEventListener('DOMContentLoaded', function() {
+            const content = document.querySelector('.content');
+            const headings = content.querySelectorAll('h1, h2, h3, h4, h5, h6');
+
+            if (headings.length > 2 && !content.querySelector('.toc')) {
+                const toc = document.createElement('div');
+                toc.className = 'toc';
+
+                const title = document.createElement('div');
+                title.className = 'toc-title';
+                title.textContent = 'Table of Contents';
+                toc.appendChild(title);
+
+                const list = document.createElement('ul');
+
+                headings.forEach((heading, index) => {
+                    // Skip the main title
+                    if (index === 0) return;
+
+                    const id = `heading-${index}`;
+                    heading.id = id;
+
+                    const li = document.createElement('li');
+                    const a = document.createElement('a');
+                    a.href = `#${id}`;
+                    a.textContent = heading.textContent;
+                    a.style.paddingLeft = `${(parseInt(heading.tagName.substring(1)) - 1) * 15}px`;
+
+                    li.appendChild(a);
+                    list.appendChild(li);
+                });
+
+                toc.appendChild(list);
+
+                // Insert TOC after first paragraph or at beginning
+                const firstP = content.querySelector('p');
+                if (firstP) {
+                    firstP.parentNode.insertBefore(toc, firstP.nextSibling);
+                } else {
+                    content.insertBefore(toc, content.firstChild);
+                }
+            }
+        });
+    </script>
+</body>
+</html>
