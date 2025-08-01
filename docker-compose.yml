@@ -1,0 +1,25 @@
+services:
+  appdaemon-docs-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: appdaemon-docs-server
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - /path/to/your/appdaemon/apps:/app/appdaemon-apps:ro
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8080
+      - RELOAD=false
+      - LOG_LEVEL=info
+      - FORCE_REGENERATE=false
+      - ENABLE_FILE_WATCHER=true
+      - WATCH_DEBOUNCE_DELAY=2.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
