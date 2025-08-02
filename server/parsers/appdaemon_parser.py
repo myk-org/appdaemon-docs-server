@@ -952,7 +952,7 @@ class AppDaemonParser:
         return list(set(entities))
 
     def _extract_constant_reference(self, node: ast.Attribute) -> str | None:
-        """Extract constant references like Home.Kitchen.Light or Persons.meni."""
+        """Extract constant references like Home.Kitchen.Light or Persons.user."""
 
         def get_full_attr_name(node: ast.AST) -> str:
             if isinstance(node, ast.Name):
