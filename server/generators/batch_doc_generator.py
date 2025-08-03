@@ -5,13 +5,11 @@ This module provides a command-line interface and batch processing capabilities
 for generating documentation for multiple AppDaemon automation files at once.
 """
 
-import argparse
-import sys
 from pathlib import Path
 from typing import Any, Callable
 
-from generators.doc_generator import AppDaemonDocGenerator
-from parsers.appdaemon_parser import parse_appdaemon_file
+from server.generators.doc_generator import AppDaemonDocGenerator
+from server.parsers.appdaemon_parser import parse_appdaemon_file
 
 
 class BatchDocGenerator:
@@ -27,7 +25,7 @@ class BatchDocGenerator:
         """
         self.apps_dir = Path(apps_dir)
         self.docs_dir = Path(docs_dir)
-        self.doc_generator = AppDaemonDocGenerator()
+        self.doc_generator = AppDaemonDocGenerator(str(self.docs_dir))
 
         # Ensure docs directory exists
         self.docs_dir.mkdir(parents=True, exist_ok=True)
@@ -288,103 +286,3 @@ class BatchDocGenerator:
             title = title.replace(old, new)
 
         return title
-
-
-def main() -> None:
-    """Command-line interface for batch documentation generation."""
-    parser = argparse.ArgumentParser(description="Generate documentation for AppDaemon automation files")
-
-    parser.add_argument(
-        "--apps-dir",
-        "-a",
-        type=str,
-        default="../apps",
-        help="Directory containing AppDaemon Python files (default: ../apps)",
-    )
-
-    parser.add_argument(
-        "--docs-dir",
-        "-d",
-        type=str,
-        default="../apps/docs",
-        help="Directory to output generated documentation (default: ../apps/docs)",
-    )
-
-    parser.add_argument("--force", "-f", action="store_true", help="Force regeneration of existing documentation files")
-
-    parser.add_argument("--index-only", "-i", action="store_true", help="Generate only the index file")
-
-    parser.add_argument("--single-file", "-s", type=str, help="Generate documentation for a single file only")
-
-    args = parser.parse_args()
-
-    # Initialize batch generator
-    batch_gen = BatchDocGenerator(args.apps_dir, args.docs_dir)
-
-    if args.index_only:
-        # Generate only index file
-        print("📄 Generating index file...")
-        index_content = batch_gen.generate_index_file()
-        index_path = batch_gen.docs_dir / "README.md"
-        index_path.write_text(index_content, encoding="utf-8")
-        print(f"✅ Generated index: {index_path}")
-        return
-
-    if args.single_file:
-        # Generate documentation for single file
-        file_path = Path(args.apps_dir) / args.single_file
-        if not file_path.exists():
-            print(f"❌ File not found: {file_path}")
-            sys.exit(1)
-
-        print(f"📝 Generating docs for {file_path.name}...")
-        docs, success = batch_gen.generate_single_file_docs(file_path)
-
-        output_file = batch_gen.docs_dir / f"{file_path.stem}.md"
-        output_file.write_text(docs, encoding="utf-8")
-
-        if success:
-            print(f"✅ Generated: {output_file}")
-        else:
-            print(f"❌ Failed to generate docs for {file_path.name}")
-            sys.exit(1)
-        return
-
-    # Generate documentation for all files
-    print("🚀 Starting batch documentation generation...")
-    results = batch_gen.generate_all_docs(force_regenerate=args.force)
-
-    # Generate index file
-    print("📄 Generating index file...")
-    index_content = batch_gen.generate_index_file()
-    index_path = batch_gen.docs_dir / "README.md"
-    index_path.write_text(index_content, encoding="utf-8")
-
-    # Print summary
-    print("\n" + "=" * 50)
-    print("📊 GENERATION SUMMARY")
-    print("=" * 50)
-    print(f"Total files processed: {results['total_files']}")
-    print(f"✅ Successful: {results['successful']}")
-    print(f"❌ Failed: {results['failed']}")
-    print(f"⏭️  Skipped: {results['skipped']}")
-    print(f"📄 Index file: {index_path}")
-
-    if results["failed_files"]:
-        print("\n❌ Failed files:")
-        for file_path in results["failed_files"]:
-            print(f"  - {file_path}")
-
-    if results["generated_files"]:
-        print("\n✅ Generated files:")
-        for file_path in results["generated_files"][:5]:  # Show first 5
-            print(f"  - {Path(file_path).name}")
-        if len(results["generated_files"]) > 5:
-            print(f"  ... and {len(results['generated_files']) - 5} more")
-
-    print("\n🎉 Documentation generation complete!")
-    print(f"📁 Output directory: {batch_gen.docs_dir}")
-
-
-if __name__ == "__main__":
-    main()

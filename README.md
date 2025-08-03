@@ -20,10 +20,49 @@ This Docker-based service transforms your AppDaemon Python automation files into
 
 ## Quick Start
 
+### Local Development
+
+For local development and testing:
+
+```bash
+git clone https://github.com/myk-org/appdaemon-docs-server
+cd appdaemon-docs-server
+uv sync
+uv run server/run-dev.py
+```
+
+Then open http://127.0.0.1:8080 in your browser.
+
+See [DEVELOPMENT.md](DEVELOPMENT.md) for detailed local development instructions.
+
+### Testing
+
+Run the test suite:
+
+```bash
+# Run all tests
+uv run pytest server/tests/
+
+# Run API tests only
+uv run pytest server/tests/api/
+
+# Run UI tests only (requires system dependencies)
+uv run pytest server/tests/ui/
+
+# Run with test runner script
+uv run python run-tests.py
+```
+
+The test suite includes:
+- **API Tests** (`server/tests/api/`): Documentation generation and file watching
+- **UI Tests** (`server/tests/ui/`): Color contrast, accessibility, and interface functionality using Playwright
+
+### Production Deployment
+
 ### 1. Clone the Repository
 
 ```bash
-git https://github.com/myk-org/appdaemon-docs-server
+git clone https://github.com/myk-org/appdaemon-docs-server
 cd appdaemon-docs-server
 ```
 

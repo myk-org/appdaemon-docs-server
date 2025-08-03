@@ -15,15 +15,19 @@ from typing import Any
 
 import markdown
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pygments.formatters import HtmlFormatter
 
-from websocket.websocket_manager import websocket_manager, EventType, WebSocketEvent
-from generators.batch_doc_generator import BatchDocGenerator
-from watchers.file_watcher import FileWatcher, WatchConfig
+from server.generators.batch_doc_generator import BatchDocGenerator
+from server.watchers.file_watcher import FileWatcher, WatchConfig
+from server.websocket.websocket_manager import EventType, WebSocketEvent, websocket_manager
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Configure logging with environment variable support
 log_level = os.getenv("LOG_LEVEL", "info").upper()
@@ -39,10 +43,15 @@ APP_DESCRIPTION = os.getenv(
 
 
 # Base paths - resolve at startup for better performance
-DOCS_DIR = Path(os.getenv("DOCS_DIR", "/app/docs")).resolve()
-APPS_DIR = Path(os.getenv("APPS_DIR", "/app/appdaemon-apps")).resolve()
-TEMPLATES_DIR = Path("templates")
-STATIC_DIR = Path("static")
+APPS_DIR_FROM_ENV = os.getenv("APPS_DIR")
+
+if not APPS_DIR_FROM_ENV:
+    raise ValueError("APPS_DIR environment variable not set")
+
+APPS_DIR = Path(APPS_DIR_FROM_ENV).resolve()
+DOCS_DIR = Path("data/generated-docs")
+TEMPLATES_DIR = Path("server/templates")
+STATIC_DIR = Path("server/static")
 
 # Global components for startup integration
 file_watcher: FileWatcher | None = None

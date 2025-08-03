@@ -26,8 +26,8 @@ class TestWatchConfig:
         """Test default configuration values."""
         config = WatchConfig()
 
-        assert config.watch_directory == Path("../apps")
-        assert config.output_directory == Path("../apps/docs")
+        assert config.watch_directory == Path("/app/appdaemon-apps")
+        assert config.output_directory == Path("/app/docs")
         assert config.debounce_delay == 2.0
         assert config.max_retry_attempts == 3
         assert config.retry_delay == 1.0
@@ -445,8 +445,3 @@ async def test_high_volume_events():
         # Verify some events were processed (exact number depends on debouncing)
         assert events_processed > 0
         assert events_processed <= len(test_files)  # Should not exceed due to debouncing
-
-
-if __name__ == "__main__":
-    # Run tests
-    pytest.main([__file__, "-v"])

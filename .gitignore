@@ -4,3 +4,18 @@ CLAUDE.md
 .agent-os/
 .cursorrules
 .claude/
+
+# Local devlopment
+local-docs/
+generated-docs
+
+# ENV
+.env
+.dev_env
+
+# TESTS
+.coverage
+htmlcov
+
+# APP
+data

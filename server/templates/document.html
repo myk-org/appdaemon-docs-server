@@ -20,17 +20,91 @@
             -webkit-tap-highlight-color: transparent;
         }
 
+        /* CSS Custom Properties for Theme System */
+        :root {
+            /* Light theme colors */
+            --bg-primary: #f8f9fa;
+            --bg-secondary: #ffffff;
+            --bg-tertiary: #e9ecef;
+            --bg-card: #f8f9fa;
+            --bg-card-hover: #e9ecef;
+            --bg-input: #ffffff;
+            --bg-button: #1e3a8a;
+            --bg-button-hover: #1e40af;
+            --bg-button-secondary: #ffffff;
+            --bg-button-secondary-hover: #e9ecef;
+
+            /* Text colors */
+            --text-primary: #333333;
+            --text-secondary: #6c757d;
+            --text-tertiary: #868e96;
+            --text-heading: #2c3e50;
+            --text-link: #3498db;
+            --text-link-hover: #5dade2;
+            --text-button: #ffffff;
+            --text-button-secondary: #495057;
+            --text-monospace: #6c757d;
+
+            /* Border colors */
+            --border-primary: #dee2e6;
+            --border-secondary: #ced4da;
+            --border-accent: #3498db;
+            --border-hover: #5dade2;
+
+            /* Shadow colors */
+            --shadow-light: rgba(0, 0, 0, 0.1);
+            --shadow-medium: rgba(0, 0, 0, 0.15);
+            --shadow-heavy: rgba(0, 0, 0, 0.2);
+
+            /* Theme transition duration */
+            --theme-transition: 0.3s ease;
+        }
+
+        /* Dark theme color overrides */
+        [data-theme="dark"] {
+            --bg-primary: #1a1a1a;
+            --bg-secondary: #2d2d2d;
+            --bg-tertiary: #1e1e1e;
+            --bg-card: #1e1e1e;
+            --bg-card-hover: #333333;
+            --bg-input: #1e1e1e;
+            --bg-button: #2563eb;
+            --bg-button-hover: #1d4ed8;
+            --bg-button-secondary: #1e1e1e;
+            --bg-button-secondary-hover: #333333;
+
+            --text-primary: #e0e0e0;
+            --text-secondary: #aaaaaa;
+            --text-tertiary: #888888;
+            --text-heading: #f0f0f0;
+            --text-link: #5dade2;
+            --text-link-hover: #3498db;
+            --text-button: #ffffff;
+            --text-button-secondary: #e0e0e0;
+            --text-monospace: #aaaaaa;
+
+            --border-primary: #444444;
+            --border-secondary: #555555;
+            --border-accent: #5dade2;
+            --border-hover: #3498db;
+
+            --shadow-light: rgba(0, 0, 0, 0.3);
+            --shadow-medium: rgba(0, 0, 0, 0.4);
+            --shadow-heavy: rgba(0, 0, 0, 0.5);
+        }
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
             line-height: 1.6;
             margin: 0;
             padding: 20px;
-            background-color: #f8f9fa;
-            color: #333;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
             font-feature-settings: "liga" 1, "kern" 1;
             text-rendering: optimizeLegibility;
             -webkit-font-smoothing: antialiased;
             -moz-osx-font-smoothing: grayscale;
+            transition: background-color var(--theme-transition), color var(--theme-transition);
         }
 
         /* Normalize form elements and interactive elements */
@@ -96,66 +170,76 @@
         .container {
             max-width: 900px;
             margin: 0 auto;
-            background: white;
+            background: var(--bg-secondary);
             padding: 40px;
             border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 10px var(--shadow-light);
+            transition: background-color var(--theme-transition), box-shadow var(--theme-transition);
         }
         .header {
-            border-bottom: 2px solid #e9ecef;
+            border-bottom: 2px solid var(--border-primary);
             padding-bottom: 20px;
             margin-bottom: 30px;
+            transition: border-color var(--theme-transition);
         }
         .breadcrumb {
             font-size: 1em;
-            color: #6c757d;
+            color: var(--text-secondary);
             margin-bottom: 10px;
+            transition: color var(--theme-transition);
         }
         .breadcrumb a {
-            color: #3498db;
+            color: var(--text-link);
             text-decoration: none;
+            transition: color var(--theme-transition);
         }
         .breadcrumb a:hover {
             text-decoration: underline;
         }
         h1 {
-            color: #2c3e50;
+            color: var(--text-heading);
             margin: 0;
             font-size: 2.2em;
+            transition: color var(--theme-transition);
         }
         .content h1 {
-            color: #2c3e50;
-            border-bottom: 2px solid #3498db;
+            color: var(--text-heading);
+            border-bottom: 2px solid var(--border-accent);
             padding-bottom: 10px;
             margin-top: 30px;
             margin-bottom: 20px;
+            transition: color var(--theme-transition), border-color var(--theme-transition);
         }
         .content h2 {
-            color: #34495e;
-            border-bottom: 1px solid #bdc3c7;
+            color: var(--text-heading);
+            border-bottom: 1px solid var(--border-secondary);
             padding-bottom: 5px;
             margin-top: 25px;
             margin-bottom: 15px;
+            transition: color var(--theme-transition), border-color var(--theme-transition);
         }
         .content h3 {
-            color: #34495e;
+            color: var(--text-heading);
             margin-top: 20px;
             margin-bottom: 10px;
+            transition: color var(--theme-transition);
         }
         .content pre {
-            background: #f8f9fa;
-            border: 1px solid #e9ecef;
+            background: var(--bg-card);
+            border: 1px solid var(--border-primary);
             border-radius: 4px;
             padding: 15px;
             overflow-x: auto;
             font-size: 0.9em;
+            transition: background-color var(--theme-transition), border-color var(--theme-transition);
         }
         .content code {
-            background: #f8f9fa;
+            background: var(--bg-card);
             padding: 2px 6px;
             border-radius: 3px;
             font-size: 0.95em;
-            color: #e74c3c;
+            color: var(--text-monospace);
+            transition: background-color var(--theme-transition), color var(--theme-transition);
         }
         .content pre code {
             background: none;
@@ -163,19 +247,21 @@
             color: inherit;
         }
         .content blockquote {
-            border-left: 4px solid #3498db;
+            border-left: 4px solid var(--border-accent);
             margin: 20px 0;
             padding: 10px 20px;
-            background: #f8f9fa;
-            color: #555;
+            background: var(--bg-card);
+            color: var(--text-secondary);
+            transition: border-color var(--theme-transition), background-color var(--theme-transition), color var(--theme-transition);
         }
         .table-wrapper {
             overflow-x: auto;
             margin: 20px 0;
-            border: 1px solid #dee2e6;
+            border: 1px solid var(--border-primary);
             border-radius: 6px;
             width: 100%;
             max-width: 100%;
+            transition: border-color var(--theme-transition);
         }
         .content table {
             width: 100%;
@@ -186,18 +272,21 @@
         }
         .content th,
         .content td {
-            border: 1px solid #dee2e6;
+            border: 1px solid var(--border-primary);
             padding: 12px;
             text-align: left;
             word-break: break-word;
             overflow-wrap: break-word;
+            transition: border-color var(--theme-transition);
         }
         .content td:last-child {
             white-space: normal; /* Allow wrapping in last column */
         }
         .content th {
-            background: #f8f9fa;
+            background: var(--bg-tertiary);
             font-weight: 600;
+            color: var(--text-heading);
+            transition: background-color var(--theme-transition), color var(--theme-transition);
         }
 
         /* Dark/Light Theme Toggle */
@@ -222,66 +311,6 @@
             transform: scale(1.1);
         }
 
-        /* Dark Theme Styles */
-        [data-theme="dark"] {
-            background-color: #1a1a1a !important;
-            color: #e0e0e0 !important;
-        }
-        [data-theme="dark"] .container {
-            background: #2d2d2d !important;
-            color: #e0e0e0 !important;
-        }
-        [data-theme="dark"] .header {
-            border-bottom-color: #444 !important;
-        }
-        [data-theme="dark"] .breadcrumb {
-            color: #aaa !important;
-        }
-        [data-theme="dark"] .breadcrumb a {
-            color: #5dade2 !important;
-        }
-        [data-theme="dark"] h1,
-        [data-theme="dark"] .content h1,
-        [data-theme="dark"] .content h2,
-        [data-theme="dark"] .content h3 {
-            color: #f0f0f0 !important;
-            border-bottom-color: #5dade2 !important;
-        }
-        [data-theme="dark"] .content pre {
-            background: #1e1e1e !important;
-            border-color: #444 !important;
-            color: #e0e0e0 !important;
-        }
-        [data-theme="dark"] .content code {
-            background: #1e1e1e !important;
-            color: #f39c12 !important;
-        }
-        [data-theme="dark"] .content blockquote {
-            background: #1e1e1e !important;
-            border-left-color: #5dade2 !important;
-            color: #ccc !important;
-        }
-        [data-theme="dark"] .content table {
-            border-color: #444 !important;
-        }
-        [data-theme="dark"] .content th,
-        [data-theme="dark"] .content td {
-            border-color: #444 !important;
-        }
-        [data-theme="dark"] .content th {
-            background: #1e1e1e !important;
-            color: #e0e0e0 !important;
-        }
-        [data-theme="dark"] .toc {
-            background: #1e1e1e !important;
-            border-color: #444 !important;
-        }
-        [data-theme="dark"] .back-link {
-            background: #5dade2 !important;
-        }
-        [data-theme="dark"] .back-link:hover {
-            background: #3498db !important;
-        }
 
         /* WebSocket Status Indicator */
         .websocket-status {
@@ -303,7 +332,7 @@
         }
         .websocket-status.connecting {
             background: #ffc107;
-            color: #333;
+            color: var(--text-primary);
         }
         .websocket-status.disconnected {
             background: #dc3545;
@@ -349,8 +378,9 @@
         }
         .notification-message {
             font-size: 13px;
-            color: #666;
+            color: var(--text-secondary);
             line-height: 1.4;
+            transition: color var(--theme-transition);
         }
         .notification-close {
             position: absolute;
@@ -360,18 +390,9 @@
             border: none;
             font-size: 16px;
             cursor: pointer;
-            color: #999;
+            color: var(--text-tertiary);
         }
 
-        /* Dark theme for WebSocket UI */
-        [data-theme="dark"] .notification-toast {
-            background: #2d2d2d !important;
-            border-color: #444 !important;
-            color: #e0e0e0 !important;
-        }
-        [data-theme="dark"] .notification-message {
-            color: #ccc !important;
-        }
 
         /* Document refresh indicator */
         .refresh-indicator {
@@ -406,23 +427,27 @@
             margin-bottom: 8px;
         }
         .content a {
-            color: #3498db;
+            color: var(--text-link);
             text-decoration: none;
+            transition: color var(--theme-transition);
         }
         .content a:hover {
             text-decoration: underline;
+            color: var(--text-link-hover);
         }
         .toc {
-            background: #f8f9fa;
-            border: 1px solid #dee2e6;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-primary);
             border-radius: 6px;
             padding: 20px;
             margin: 20px 0;
+            transition: background-color var(--theme-transition), border-color var(--theme-transition);
         }
         .toc .toc-title {
             font-weight: 600;
             margin-bottom: 10px;
-            color: #2c3e50;
+            color: var(--text-heading);
+            transition: color var(--theme-transition);
         }
         .toc ul {
             list-style: none;
@@ -432,12 +457,14 @@
             margin-bottom: 5px;
         }
         .toc a {
-            color: #3498db;
+            color: var(--text-link);
             text-decoration: none;
             font-size: 0.95em;
+            transition: color var(--theme-transition);
         }
         .toc a:hover {
             text-decoration: underline;
+            color: var(--text-link-hover);
         }
         .back-link {
             display: inline-block;
@@ -451,6 +478,48 @@
         }
         .back-link:hover {
             background: #2980b9;
+        }
+
+        /* Regenerate button styles */
+        .regenerate-button {
+            padding: 8px 16px;
+            background: var(--bg-button);
+            color: var(--text-button);
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9em;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            margin-left: 10px;
+            transition: all var(--theme-transition);
+        }
+        .regenerate-button:hover {
+            background: var(--bg-button-hover);
+        }
+        .regenerate-button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .regenerate-button.processing {
+            opacity: 0.8;
+        }
+        .regenerate-button .spinner {
+            display: none;
+            width: 14px;
+            height: 14px;
+            border: 2px solid transparent;
+            border-top: 2px solid currentColor;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        .regenerate-button.processing .spinner {
+            display: block;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
 
         /* Syntax highlighting adjustments */
@@ -512,7 +581,13 @@
             <div class="breadcrumb">
                 <a href="/docs/">📚 Documentation</a> / {{ filename }}
             </div>
-            <h1>{{ title }}</h1>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <h1>{{ title }}</h1>
+                <button id="regenerateDocBtn" class="regenerate-button" title="Regenerate This Document">
+                    <div class="spinner"></div>
+                    🔄 Regenerate
+                </button>
+            </div>
         </div>
 
         <div class="content">
@@ -774,6 +849,65 @@
         let documentWebSocket;
         document.addEventListener('DOMContentLoaded', function() {
             documentWebSocket = new DocumentWebSocket();
+        });
+
+        // Regenerate document functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            const regenerateDocBtn = document.getElementById('regenerateDocBtn');
+            const currentDocument = '{{ filename }}';
+
+            regenerateDocBtn.addEventListener('click', async function() {
+                if (regenerateDocBtn.classList.contains('processing')) {
+                    return; // Prevent multiple clicks
+                }
+
+                try {
+                    // Update button state
+                    regenerateDocBtn.classList.add('processing');
+                    regenerateDocBtn.disabled = true;
+                    regenerateDocBtn.innerHTML = '<div class="spinner"></div> Regenerating...';
+
+                    // Make API call to regenerate this specific doc
+                    const response = await fetch(`/api/generate/file/${currentDocument}?force=true`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        }
+                    });
+
+                    if (response.ok) {
+                        const result = await response.json();
+
+                        // Show success notification via WebSocket if available
+                        if (documentWebSocket) {
+                            documentWebSocket.showNotification('success', 'Regeneration Started', `Documentation regeneration for ${currentDocument} has been initiated.`);
+                        }
+
+                        // Reset button after a delay
+                        setTimeout(() => {
+                            regenerateDocBtn.classList.remove('processing');
+                            regenerateDocBtn.disabled = false;
+                            regenerateDocBtn.innerHTML = '<div class="spinner"></div>🔄 Regenerate';
+                        }, 2000);
+
+                    } else {
+                        throw new Error(`Server responded with ${response.status}`);
+                    }
+
+                } catch (error) {
+                    console.error('Regeneration failed:', error);
+
+                    // Show error notification
+                    if (documentWebSocket) {
+                        documentWebSocket.showNotification('error', 'Regeneration Failed', `Failed to start regeneration: ${error.message}`);
+                    }
+
+                    // Reset button
+                    regenerateDocBtn.classList.remove('processing');
+                    regenerateDocBtn.disabled = false;
+                    regenerateDocBtn.innerHTML = '<div class="spinner"></div>🔄 Regenerate';
+                }
+            });
         });
 
         // Clean up on page unload

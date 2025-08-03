@@ -32,13 +32,13 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
 # Install curl for health check and update packages
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+  apt-get install -y --no-install-recommends curl && \
+  apt-get clean && \
+  rm -rf /var/lib/apt/lists/*
 
 # Create non-root user for security
 RUN groupadd --gid 1000 docs && \
-    useradd --uid 1000 --gid docs --shell /bin/bash --create-home docs
+  useradd --uid 1000 --gid docs --shell /bin/bash --create-home docs
 
 # Set working directory
 WORKDIR /app
@@ -50,7 +50,7 @@ COPY --from=builder /app/.uv /app/.uv
 RUN mkdir -p /app/templates /app/static /app/docs && chown -R docs:docs /app
 
 # Copy application files from server directory
-COPY --chown=docs:docs server/ ./
+COPY --chown=docs:docs . /app
 COPY --chown=docs:docs pyproject.toml uv.lock ./
 
 # Switch to non-root user
@@ -61,7 +61,7 @@ EXPOSE 8080
 
 # Health check using curl (more reliable than Python requests)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+  CMD curl -f http://localhost:8080/health || exit 1
 
 # Start the application
-CMD ["uv", "run", "main.py"]
+CMD ["uv", "run", "server/main.py"]

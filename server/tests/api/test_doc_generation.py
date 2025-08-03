@@ -167,25 +167,3 @@ def test_diagram_generation():
 
     except Exception as e:
         print(f"❌ Error generating diagrams: {e}")
-
-
-def main():
-    """Run all tests."""
-    print("🚀 AppDaemon Documentation Generation System Test")
-    print("=" * 60)
-
-    # Run all tests
-    test_single_file_parsing()
-    test_documentation_generation()
-    test_batch_processing()
-    test_diagram_generation()
-
-    print("\n🎉 All tests completed!")
-    print("\nNext steps:")
-    print("1. Review the generated test files")
-    print("2. Run batch generation: python -m batch_doc_generator")
-    print("3. Check the generated documentation in apps/docs/")
-
-
-if __name__ == "__main__":
-    main()

@@ -8,6 +8,7 @@ and comprehensive logging.
 
 import asyncio
 import logging
+import os
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -18,8 +19,8 @@ from weakref import WeakSet
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
-from generators.batch_doc_generator import BatchDocGenerator
-from websocket.websocket_manager import websocket_manager, EventType
+from server.generators.batch_doc_generator import BatchDocGenerator
+from server.websocket.websocket_manager import websocket_manager, EventType
 
 
 @dataclass
@@ -27,8 +28,8 @@ class WatchConfig:
     """Configuration for file watching behavior."""
 
     # Directory paths
-    watch_directory: Path = field(default_factory=lambda: Path("/app/appdaemon-apps"))
-    output_directory: Path = field(default_factory=lambda: Path("/app/docs"))
+    watch_directory: Path = field(default_factory=lambda: Path(os.getenv("APPS_DIR", "/app/appdaemon-apps")))
+    output_directory: Path = field(default_factory=lambda: Path(os.getenv("DOCS_DIR", "/app/docs")))
 
     # File filtering
     file_patterns: set[str] = field(default_factory=lambda: {"*.py"})
@@ -66,6 +67,11 @@ class FileEvent:
     event_type: str
     timestamp: float
     retry_count: int = 0
+
+    def __post_init__(self) -> None:
+        """Ensure file_path is a Path object."""
+        # This method can be used for validation if needed
+        pass
 
 
 @dataclass
@@ -670,57 +676,3 @@ class FileWatcher:
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """Async context manager exit."""
         await self.stop_watching()
-
-
-# Example usage and testing
-async def main() -> None:
-    """Example usage of the FileWatcher."""
-    import sys
-
-    # Configure logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout), logging.FileHandler("file_watcher.log")],
-    )
-
-    # Create configuration
-    config = WatchConfig(
-        watch_directory=Path("../apps"),
-        output_directory=Path("../apps/docs"),
-        debounce_delay=2.0,
-        max_retry_attempts=3,
-        log_level="DEBUG",
-    )
-
-    # Create and start watcher
-    async with FileWatcher(config) as watcher:
-        # Add a callback to log generation results
-        def log_result(result: GenerationResult) -> None:
-            if result.success:
-                print(f"✅ Generated: {result.file_path.name} -> {result.output_path}")
-            else:
-                print(f"❌ Failed: {result.file_path.name} - {result.error_message}")
-
-        watcher.add_generation_callback(log_result)
-
-        # Generate all docs on startup
-        await watcher.generate_all_docs(force=True)
-
-        # Keep watching
-        print("File watcher is running. Press Ctrl+C to stop.")
-        try:
-            while True:
-                await asyncio.sleep(1)
-
-                # Print status every 30 seconds
-                if int(time.time()) % 30 == 0:
-                    status = watcher.get_status()
-                    print(f"Status: {status['statistics']}")
-
-        except KeyboardInterrupt:
-            print("Stopping file watcher...")
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
