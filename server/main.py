@@ -56,14 +56,16 @@ if not APPS_DIR_FROM_ENV:
     raise ValueError("APPS_DIR environment variable not set")
 
 APPS_DIR = Path(APPS_DIR_FROM_ENV).resolve()
-DOCS_DIR = Path("data/generated-docs")
-TEMPLATES_DIR = Path("server/templates")
-STATIC_DIR = Path("server/static")
+DOCS_DIR = Path(os.getenv("DOCS_DIR", "data/generated-docs")).resolve()
+TEMPLATES_DIR = Path(os.getenv("TEMPLATES_DIR", "server/templates")).resolve()
+STATIC_DIR = Path(os.getenv("STATIC_DIR", "server/static")).resolve()
 
 # Global components for startup integration
 file_watcher: FileWatcher | None = None
 startup_generation_completed = False
 startup_errors: list[str] = []
+# Track asyncio tasks to prevent unawaited coroutine warnings
+pending_tasks: set[asyncio.Task[None]] = set()
 
 
 # Global markdown processor instance
@@ -110,7 +112,10 @@ async def run_initial_documentation_generation(dir_status: DirectoryStatus, conf
             )
 
         def sync_progress_callback(current: int, total: int, current_file: str, stage: str) -> None:
-            asyncio.create_task(progress_callback(current, total, current_file, stage))
+            """Sync wrapper for async progress callback with proper task tracking."""
+            task = asyncio.create_task(progress_callback(current, total, current_file, stage))
+            pending_tasks.add(task)
+            task.add_done_callback(pending_tasks.discard)
 
         # Run generation
         results = batch_generator.generate_all_docs(
@@ -306,6 +311,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.info("Stopping file watcher...")
             await file_watcher.stop_watching()
             logger.info("File watcher stopped")
+
+        # Wait for pending tasks to complete or cancel them
+        if pending_tasks:
+            logger.info(f"Waiting for {len(pending_tasks)} pending tasks to complete...")
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
+            pending_tasks.clear()
 
         # Clear markdown processor cache
         markdown_processor._cache.clear()
@@ -841,8 +852,15 @@ async def broadcast_test_message(message: str = "Test message") -> dict[str, Any
         raise HTTPException(status_code=500, detail="Error broadcasting message") from e
 
 
-mcp = FastApiMCP(app)
-mcp.mount_http()
+# Initialize MCP integration with proper error handling
+try:
+    mcp = FastApiMCP(app)
+    mcp.mount_http()
+    logger.info("✅ MCP integration initialized successfully")
+except Exception as e:
+    logger.warning(f"⚠️ MCP integration failed to initialize: {e}")
+    logger.warning("Server will continue without MCP functionality")
+    # Continue without MCP - this is not a critical failure
 
 
 def main() -> None:
@@ -889,9 +907,9 @@ def main() -> None:
     try:
         asyncio.run(server.serve())
     except KeyboardInterrupt:
-        print("\n👋 Server stopped by user")
+        logger.info("\n👋 Server stopped by user")
     except Exception as e:
-        print(f"❌ Server error: {e}")
+        logger.error(f"❌ Server error: {e}")
         raise
 
 

@@ -26,7 +26,7 @@ This guide helps you set up and run the AppDaemon Documentation Server locally f
    ```
 
 4. **Access the server:**
-   Open your browser to: http://127.0.0.1:8080
+   Open your browser to: <http://127.0.0.1:8080>
 
 ## Development Server Features
 
@@ -38,7 +38,7 @@ The `server/run-dev.py` script automatically:
 
 ## Local Directory Structure
 
-```
+```text
 appdaemon-docs-server/
 ├── local-docs/          # Generated documentation (auto-created)
 ├── local-apps/          # Place your AppDaemon files here for testing
@@ -55,7 +55,7 @@ To test the documentation generation with actual AppDaemon automation files:
 
 1. Copy your AppDaemon Python files to the `local-apps/` directory
 2. The server will automatically detect changes and regenerate documentation
-3. View the generated docs at http://127.0.0.1:8080
+3. View the generated docs at <http://127.0.0.1:8080>
 
 ## Environment Configuration
 

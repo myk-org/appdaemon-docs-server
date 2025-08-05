@@ -257,9 +257,24 @@ class BatchDocGenerator:
         index_content += "- **Diagrams**: Mermaid flowcharts and architecture diagrams\n"
         index_content += "- **Templates**: Standardized markdown structure\n\n"
         index_content += "To regenerate documentation:\n\n"
+        index_content += "### Local Development\n"
         index_content += "```bash\n"
-        index_content += "cd docs_server/utils\n"
-        index_content += "python -m batch_doc_generator --force\n"
+        index_content += "# Run the development server with file watching enabled\n"
+        index_content += "uv run server/run-dev.py\n"
+        index_content += "\n"
+        index_content += "# Or manually trigger regeneration via API\n"
+        index_content += "curl -X POST http://localhost:8080/api/generate/all?force=true\n"
+        index_content += "```\n\n"
+        index_content += "### Container Environment\n"
+        index_content += "```bash\n"
+        index_content += "# Inside the container, use the API endpoint\n"
+        index_content += "curl -X POST http://localhost:8080/api/generate/all?force=true\n"
+        index_content += "\n"
+        index_content += "# Or connect to the running container and run Python directly\n"
+        index_content += 'docker exec -it <container_name> python -c "\n'
+        index_content += "from server.generators.batch_doc_generator import BatchDocGenerator;\n"
+        index_content += "generator = BatchDocGenerator('/app/apps', '/app/docs');\n"
+        index_content += 'generator.generate_all_docs(force_regenerate=True)"\n'
         index_content += "```\n"
 
         return index_content

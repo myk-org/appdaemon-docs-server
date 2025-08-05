@@ -27,9 +27,9 @@ from server.websocket.websocket_manager import websocket_manager, EventType
 class WatchConfig:
     """Configuration for file watching behavior."""
 
-    # Directory paths
-    watch_directory: Path = field(default_factory=lambda: Path(os.getenv("APPS_DIR", "/app/appdaemon-apps")))
-    output_directory: Path = field(default_factory=lambda: Path(os.getenv("DOCS_DIR", "/app/docs")))
+    # Directory paths with robust defaults
+    watch_directory: Path = field(default_factory=lambda: Path(os.getenv("APPS_DIR") or "/app/appdaemon-apps"))
+    output_directory: Path = field(default_factory=lambda: Path(os.getenv("DOCS_DIR") or "/app/docs"))
 
     # File filtering
     file_patterns: set[str] = field(default_factory=lambda: {"*.py"})
@@ -69,9 +69,12 @@ class FileEvent:
     retry_count: int = 0
 
     def __post_init__(self) -> None:
-        """Ensure file_path is a Path object."""
-        # This method can be used for validation if needed
-        pass
+        """Validate file event parameters."""
+        if self.timestamp <= 0:
+            raise ValueError("Timestamp must be positive")
+
+        if self.retry_count < 0:
+            raise ValueError("Retry count cannot be negative")
 
 
 @dataclass
@@ -218,8 +221,14 @@ class FileWatcher:
 
         Args:
             config: Watch configuration, defaults to WatchConfig()
+
+        Raises:
+            ValueError: If configuration parameters are invalid
         """
         self.config = config or WatchConfig()
+
+        # Validate configuration parameters
+        self._validate_config()
 
         # Set up logging
         self.logger = logging.getLogger(__name__)
@@ -261,6 +270,23 @@ class FileWatcher:
 
         # Callbacks for external integration
         self._generation_callbacks: WeakSet[Callable[[GenerationResult], None]] = WeakSet()
+
+    def _validate_config(self) -> None:
+        """Validate configuration parameters."""
+        if self.config.debounce_delay < 0:
+            raise ValueError("Debounce delay must be non-negative")
+
+        if self.config.max_retry_attempts < 0:
+            raise ValueError("Max retry attempts must be non-negative")
+
+        if self.config.retry_delay < 0:
+            raise ValueError("Retry delay must be non-negative")
+
+        if not self.config.file_patterns:
+            raise ValueError("At least one file pattern must be specified")
+
+        if self.config.max_recent_events <= 0:
+            raise ValueError("Max recent events must be positive")
 
     def add_generation_callback(self, callback: Callable[[GenerationResult], None]) -> None:
         """Add a callback to be called when generation completes."""

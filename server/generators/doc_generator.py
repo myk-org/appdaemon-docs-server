@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from server.generators.diagram_generator import create_architecture_diagram, create_method_flow_diagram, quick_flow
-from server.parsers.appdaemon_parser import ClassInfo, ParsedFile, parse_appdaemon_file
+from server.parsers.appdaemon_parser import ClassInfo, ParsedFile
 
 
 class AppDaemonDocGenerator:
@@ -747,29 +747,3 @@ class AppDaemonDocGenerator:
                     details += f"  - `{method.name}()` - {action_summary}{entity_text}\n"
 
         return details.strip()
-
-
-def generate_appdaemon_docs(file_path: str | Path, output_path: str | Path | None = None) -> str:
-    """
-    Generate documentation for an AppDaemon file.
-
-    Args:
-        file_path: Path to the AppDaemon Python file
-        output_path: Optional path to save the generated documentation
-
-    Returns:
-        Generated markdown documentation
-    """
-
-    # Parse the file
-    parsed_file = parse_appdaemon_file(file_path)
-
-    # Generate documentation
-    generator = AppDaemonDocGenerator()
-    docs = generator.generate_documentation(parsed_file)
-
-    # Save if output path provided
-    if output_path:
-        Path(output_path).write_text(docs, encoding="utf-8")
-
-    return docs

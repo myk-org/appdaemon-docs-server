@@ -41,6 +41,8 @@ class MarkdownProcessor:
         )
         self._cache: dict[tuple[str, int], str] = {}
         self._max_cache_size = 128
+        # Track access order for true LRU eviction
+        self._access_order: list[tuple[str, int]] = []
 
     def process_file(self, file_path: str, content_hash: int) -> str:
         """
@@ -57,6 +59,9 @@ class MarkdownProcessor:
 
         # Check cache first
         if cache_key in self._cache:
+            # Update access order for LRU
+            self._access_order.remove(cache_key)
+            self._access_order.append(cache_key)
             return self._cache[cache_key]
 
         try:
@@ -67,13 +72,14 @@ class MarkdownProcessor:
             self.md.reset()
             html_content = str(self.md.convert(content))
 
-            # Cache the result with size limit
+            # Cache the result with true LRU eviction
             if len(self._cache) >= self._max_cache_size:
-                # Remove oldest entry (simple FIFO)
-                oldest_key = next(iter(self._cache))
-                del self._cache[oldest_key]
+                # Remove least recently used entry (true LRU)
+                lru_key = self._access_order.pop(0)
+                del self._cache[lru_key]
 
             self._cache[cache_key] = html_content
+            self._access_order.append(cache_key)
             return html_content
 
         except Exception as e:

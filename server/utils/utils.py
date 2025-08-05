@@ -81,7 +81,7 @@ def get_server_config() -> dict[str, Any]:
         Dictionary of server configuration values
     """
     return {
-        "host": os.getenv("HOST", "0.0.0.0"),
+        "host": os.getenv("HOST", "127.0.0.1"),
         "port": int(os.getenv("PORT", "8080")),
         "reload": parse_boolean_env("RELOAD", "true"),
         "log_level": os.getenv("LOG_LEVEL", "info").lower(),
@@ -99,9 +99,18 @@ def print_startup_info(
         server_config: Server configuration
         env_config: Environment configuration
     """
-    from server.main import APP_TITLE, APP_VERSION
+    # Import at function level to avoid circular import
+    try:
+        from server.main import APP_TITLE, APP_VERSION
 
-    print(f"Starting {APP_TITLE} v{APP_VERSION}...")
+        app_title = APP_TITLE
+        app_version = APP_VERSION
+    except ImportError:
+        # Fallback values in case of circular import
+        app_title = "AppDaemon Documentation Server"
+        app_version = "1.0.0"
+
+    print(f"Starting {app_title} v{app_version}...")
     print(f"Apps directory: {dir_status.apps_dir}")
     print(f"Documentation directory: {dir_status.docs_dir}")
     print(f"Server will be available at: http://{server_config['host']}:{server_config['port']}")

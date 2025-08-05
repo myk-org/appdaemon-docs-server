@@ -12,6 +12,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 
 def validate_env_file() -> Path:
     """Validate that .dev_env file exists and return its path."""
@@ -33,8 +35,6 @@ def run_container() -> None:
     project_root = env_file.parent
 
     # Load environment to get APPS_DIR for mounting
-    from dotenv import load_dotenv
-
     load_dotenv(env_file)
 
     apps_dir = os.environ.get("APPS_DIR")
@@ -44,6 +44,16 @@ def run_container() -> None:
         sys.exit(1)
 
     apps_path = Path(apps_dir).resolve()
+
+    # Validate apps_path is within project boundaries to prevent directory traversal
+    try:
+        apps_path.relative_to(project_root)
+    except ValueError:
+        print("❌ Error: Apps directory must be within project root for security")
+        print(f"   Project root: {project_root}")
+        print(f"   Apps path: {apps_path}")
+        sys.exit(1)
+
     if not apps_path.exists():
         print(f"⚠️  Warning: Apps directory does not exist: {apps_path}")
 
@@ -81,7 +91,7 @@ def run_container() -> None:
                 "--env-file",
                 ".dev_env",
                 "-v",
-                f"{apps_path}:{apps_path}:ro",
+                f"{apps_path}:/apps:ro",
                 "appdaemon-docs-server:dev",
             ],
             check=True,
@@ -97,10 +107,9 @@ def run_container() -> None:
 def run_local_python() -> None:
     """Run the development server with local Python."""
     env_file = validate_env_file()
+    project_root = env_file.parent
 
     # Load environment variables from .dev_env
-    from dotenv import load_dotenv
-
     load_dotenv(env_file)
 
     print("🚀 Starting AppDaemon Documentation Server (Local Python Mode)")
@@ -116,13 +125,23 @@ def run_local_python() -> None:
             print(f"   - {var}")
         sys.exit(1)
 
-    # Create documentation directory if it doesn't exist
+    # Validate apps directory path for security
+    apps_dir = os.environ["APPS_DIR"]
+    apps_path = Path(apps_dir).resolve()
 
-    print(f"📂 Apps directory: {os.environ['APPS_DIR']}")
+    try:
+        apps_path.relative_to(project_root)
+    except ValueError:
+        print("❌ Error: Apps directory must be within project root for security")
+        print(f"   Project root: {project_root}")
+        print(f"   Apps path: {apps_path}")
+        sys.exit(1)
+
+    print(f"📂 Apps directory: {apps_path}")
     print(f"🌐 Server will be available at: http://{os.environ['HOST']}:{os.environ['PORT']}")
     print()
 
-    if Path(os.environ["APPS_DIR"]).exists():
+    if apps_path.exists():
         print("✅ Apps directory found - documentation will be generated")
     else:
         print("⚠️  Apps directory not found - create it and add AppDaemon files")

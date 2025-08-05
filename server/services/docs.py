@@ -1,18 +1,26 @@
 """Documentation service for managing documentation files and metadata."""
 
+import hashlib
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 
 from fastapi import HTTPException
 
+if TYPE_CHECKING:
+    from server.processors.markdown import MarkdownProcessor
+
 logger = logging.getLogger(__name__)
+
+# Constants for timeout values
+TITLE_EXTRACTION_MAX_BYTES = 1000
+TITLE_EXTRACTION_MAX_LINES = 10
 
 
 class DocumentationService:
     """Service for managing documentation files and metadata."""
 
-    def __init__(self, docs_dir: Path, markdown_processor: Any) -> None:
+    def __init__(self, docs_dir: Path, markdown_processor: "MarkdownProcessor") -> None:
         """
         Initialize the documentation service.
 
@@ -46,6 +54,8 @@ class DocumentationService:
                 })
             except Exception as e:
                 logger.warning(f"Error reading file {file_path}: {e}")
+                # Preserve original exception for better debugging
+                logger.debug(f"Full exception details for {file_path}", exc_info=True)
                 continue
 
         # Sort by name for consistent ordering
@@ -63,12 +73,14 @@ class DocumentationService:
         """
         try:
             with open(file_path, encoding="utf-8") as f:
+                line_count = 0
                 for line in f:
                     line = line.strip()
                     if line.startswith("# "):
                         return line[2:].strip()
+                    line_count += 1
                     # Stop after first 10 lines to avoid reading entire file
-                    if f.tell() > 1000:
+                    if line_count >= TITLE_EXTRACTION_MAX_LINES:
                         break
         except Exception:
             pass
@@ -98,9 +110,10 @@ class DocumentationService:
             raise HTTPException(status_code=404, detail=f"Documentation file '{filename}' not found")
 
         try:
-            # Get file hash for cache invalidation
+            # Get file hash for cache invalidation using more robust hash calculation
             stat = file_path.stat()
-            content_hash = hash(f"{file_path}-{stat.st_mtime}-{stat.st_size}")
+            hash_input = f"{file_path}-{stat.st_mtime}-{stat.st_size}"
+            content_hash = int(hashlib.md5(hash_input.encode()).hexdigest()[:8], 16)
 
             # Process markdown with caching
             html_content = self.markdown_processor.process_file(str(file_path), content_hash)
