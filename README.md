@@ -199,14 +199,19 @@ The service includes built-in Model Context Protocol (MCP) support for AI agent 
 
 ### Available MCP Tools
 
-The server automatically generates MCP tools from FastAPI endpoints. Tools are named based on the endpoint pattern and include:
+The server automatically generates MCP tools from FastAPI endpoints with short, descriptive names:
 
-- **HTTP endpoint tools** - Auto-generated from API routes (e.g., `trigger_full_generation_api_generate_all_post`)
-- **Documentation access** - List files, get content, and search functionality
-- **System management** - Health checks, watcher status, and WebSocket monitoring
-- **File operations** - Regenerate documentation for all files or specific files
+- **health** - Check server health and status
+- **list_files** - List all available documentation files
+- **get_file** - Get content of a specific documentation file
+- **search_docs** - Search through documentation content
+- **generate_all** - Regenerate all documentation files
+- **generate_file** - Regenerate a specific documentation file
+- **ws_status** - Get WebSocket connection status
+- **watcher_status** - Get file watcher status
+- **broadcast_test** - Send test message to WebSocket clients
 
-Tool names follow the FastAPI endpoint pattern: `{method}_{path_components}_{http_method}`
+Tool names are based on custom operation IDs for brevity and clarity.
 
 ### Connecting AI Agents
 

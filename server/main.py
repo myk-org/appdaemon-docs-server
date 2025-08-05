@@ -343,7 +343,7 @@ async def root() -> RedirectResponse:
     return RedirectResponse(url="/docs/", status_code=307)
 
 
-@app.get("/health")  # type: ignore[misc]
+@app.get("/health", operation_id="health")  # type: ignore[misc]
 async def health_check() -> dict[str, str | bool | int | list[str]]:
     """
     Health check endpoint for monitoring server status.
@@ -385,7 +385,7 @@ async def health_check() -> dict[str, str | bool | int | list[str]]:
     }
 
 
-@app.get("/api/files")  # type: ignore[misc]
+@app.get("/api/files", operation_id="list_files")  # type: ignore[misc]
 async def list_documentation_files() -> dict[str, list[dict[str, Any]] | int | bool | str]:
     """
     List all available documentation files with metadata.
@@ -406,7 +406,7 @@ async def list_documentation_files() -> dict[str, list[dict[str, Any]] | int | b
         raise HTTPException(status_code=500, detail="Error listing documentation files") from e
 
 
-@app.get("/api/file/{filename}")  # type: ignore[misc]
+@app.get("/api/file/{filename}", operation_id="get_file")  # type: ignore[misc]
 async def get_file_content(filename: str) -> dict[str, str]:
     """
     Get processed content for a specific documentation file.
@@ -485,7 +485,7 @@ async def documentation_file(request: Request, filename: str) -> HTMLResponse:
         raise HTTPException(status_code=500, detail="Error rendering documentation") from e
 
 
-@app.get("/api/search")  # type: ignore[misc]
+@app.get("/api/search", operation_id="search_docs")  # type: ignore[misc]
 async def search_documentation(q: str = "") -> dict[str, list[dict[str, Any]] | str | int]:
     """
     Search through documentation content for matching files.
@@ -618,7 +618,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         await websocket_manager.disconnect(websocket)
 
 
-@app.get("/api/ws/status")  # type: ignore[misc]
+@app.get("/api/ws/status", operation_id="ws_status")  # type: ignore[misc]
 async def websocket_status() -> dict[str, Any]:
     """
     Get WebSocket connection status and statistics.
@@ -638,7 +638,7 @@ async def websocket_status() -> dict[str, Any]:
         raise HTTPException(status_code=500, detail="Error getting WebSocket status") from e
 
 
-@app.get("/api/watcher/status")  # type: ignore[misc]
+@app.get("/api/watcher/status", operation_id="watcher_status")  # type: ignore[misc]
 async def watcher_status() -> dict[str, Any]:
     """
     Get file watcher status and statistics.
@@ -667,7 +667,7 @@ async def watcher_status() -> dict[str, Any]:
         raise HTTPException(status_code=500, detail="Error getting watcher status") from e
 
 
-@app.post("/api/generate/all")  # type: ignore[misc]
+@app.post("/api/generate/all", operation_id="generate_all")  # type: ignore[misc]
 async def trigger_full_generation(force: bool = False) -> dict[str, Any]:
     """
     Manually trigger full documentation generation.
@@ -735,7 +735,7 @@ async def trigger_full_generation(force: bool = False) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}") from e
 
 
-@app.post("/api/generate/file/{filename}")  # type: ignore[misc]
+@app.post("/api/generate/file/{filename}", operation_id="generate_file")  # type: ignore[misc]
 async def trigger_single_file_generation(filename: str, force: bool = False) -> dict[str, Any]:
     """
     Manually trigger documentation generation for a single file.
@@ -814,7 +814,7 @@ async def trigger_single_file_generation(filename: str, force: bool = False) -> 
         raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}") from e
 
 
-@app.post("/api/ws/broadcast")  # type: ignore[misc]
+@app.post("/api/ws/broadcast", operation_id="broadcast_test")  # type: ignore[misc]
 async def broadcast_test_message(message: str = "Test message") -> dict[str, Any]:
     """
     Send a test broadcast message to all connected WebSocket clients.
