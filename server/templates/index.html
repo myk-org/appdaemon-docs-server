@@ -20,7 +20,7 @@
             /* Use subtle highlight for better accessibility - allows users to see tap feedback
                while reducing visual noise. Transparent removes all visual feedback which can
                be confusing for users relying on tap indicators for navigation confirmation. */
-            -webkit-tap-highlight-color: rgba(0, 0, 0, 0.1);
+            -webkit-tap-highlight-color: var(--tap-highlight-color);
         }
 
         /* CSS Custom Properties for Theme System */
@@ -59,6 +59,9 @@
             --shadow-medium: rgba(0, 0, 0, 0.15);
             --shadow-heavy: rgba(0, 0, 0, 0.2);
 
+            /* Tap highlight for mobile safari */
+            --tap-highlight-color: rgba(0, 0, 0, 0.1);
+
             /* Theme transition duration */
             --theme-transition: 0.3s ease;
         }
@@ -94,6 +97,8 @@
             --shadow-light: rgba(0, 0, 0, 0.3);
             --shadow-medium: rgba(0, 0, 0, 0.4);
             --shadow-heavy: rgba(0, 0, 0, 0.5);
+
+            --tap-highlight-color: rgba(255, 255, 255, 0.1);
         }
 
         body {

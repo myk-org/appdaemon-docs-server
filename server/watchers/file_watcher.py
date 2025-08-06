@@ -68,8 +68,13 @@ class FileEvent:
     timestamp: float
     retry_count: int = 0
 
-    def __post_init__(self) -> None:
-        """Validate file event parameters."""
+    def __init__(self, file_path: Path | str, event_type: str, timestamp: float, retry_count: int = 0) -> None:
+        """Initialize FileEvent with automatic path conversion."""
+        self.file_path = Path(file_path) if isinstance(file_path, str) else file_path
+        self.event_type = event_type
+        self.timestamp = timestamp
+        self.retry_count = retry_count
+
         if self.timestamp <= 0:
             raise ValueError("Timestamp must be positive")
 

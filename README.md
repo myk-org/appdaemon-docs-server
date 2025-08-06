@@ -15,6 +15,7 @@ This containerized service transforms your AppDaemon Python automation files int
 - 🔍 **Full-Text Search** - Built-in search functionality across all documentation
 - 🤖 **MCP Integration** - AI agent support through Model Context Protocol
 - 📈 **Health Monitoring** - Comprehensive status reporting and error tracking
+- 🎨 **CSS Foundation** - Cross-browser compatibility with normalize, custom properties, and optimized typography
 - 🐳 **Docker Ready** - Production-ready containerized deployment
 
 ## Quick Start
@@ -49,7 +50,7 @@ Run the development server:
 uv run server/run-dev.py
 ```
 
-The server will be available at http://127.0.0.1:8080
+The server will be available at <http://127.0.0.1:8080>
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for detailed local development instructions.
 
@@ -104,7 +105,7 @@ Start the service:
 docker compose up -d
 ```
 
-Access your documentation at http://localhost:8080
+Access your documentation at <http://localhost:8080>
 
 ## Configuration
 
