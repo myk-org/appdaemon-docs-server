@@ -1,0 +1,186 @@
+"""Utility functions for the documentation server."""
+
+import os
+from pathlib import Path
+from typing import Any
+
+
+def parse_boolean_env(env_var: str, default: str = "false") -> bool:
+    """
+    Parse a boolean environment variable with consistent behavior.
+
+    Args:
+        env_var: Environment variable name
+        default: Default value if env var is not set
+
+    Returns:
+        Boolean value
+    """
+    value = os.getenv(env_var, default).lower()
+    return value in ("true", "1", "yes", "on")
+
+
+def count_automation_files(apps_dir: Path) -> int:
+    """
+    Count automation Python files in the apps directory.
+
+    Excludes infrastructure and configuration files.
+
+    Args:
+        apps_dir: Path to the apps directory
+
+    Returns:
+        Number of automation files found
+    """
+    if not apps_dir.exists():
+        return 0
+
+    excluded_files = {"const.py", "infra.py", "utils.py", "__init__.py", "apps.py", "configuration.py", "secrets.py"}
+
+    return len([f for f in apps_dir.glob("*.py") if f.name not in excluded_files])
+
+
+def count_documentation_files(docs_dir: Path) -> int:
+    """
+    Count markdown documentation files in the docs directory.
+
+    Args:
+        docs_dir: Path to the documentation directory
+
+    Returns:
+        Number of documentation files found
+    """
+    if not docs_dir.exists():
+        return 0
+
+    return len(list(docs_dir.glob("*.md")))
+
+
+def get_environment_config() -> dict[str, Any]:
+    """
+    Get all environment configuration values used by the server.
+
+    Returns:
+        Dictionary of configuration values
+    """
+    return {
+        "force_regenerate": parse_boolean_env("FORCE_REGENERATE"),
+        "enable_file_watcher": parse_boolean_env("ENABLE_FILE_WATCHER", "true"),
+        "watch_debounce_delay": float(os.getenv("WATCH_DEBOUNCE_DELAY", "2.0")),
+        "watch_max_retries": int(os.getenv("WATCH_MAX_RETRIES", "3")),
+        "watch_force_regenerate": parse_boolean_env("WATCH_FORCE_REGENERATE"),
+        "watch_log_level": os.getenv("WATCH_LOG_LEVEL", "INFO"),
+    }
+
+
+def get_server_config() -> dict[str, Any]:
+    """
+    Get server configuration values for uvicorn.
+
+    Returns:
+        Dictionary of server configuration values
+    """
+    return {
+        "host": os.getenv("HOST", "127.0.0.1"),
+        "port": int(os.getenv("PORT", "8080")),
+        "reload": parse_boolean_env("RELOAD", "true"),
+        "log_level": os.getenv("LOG_LEVEL", "info").lower(),
+    }
+
+
+def print_startup_info(
+    dir_status: "DirectoryStatus", server_config: dict[str, Any], env_config: dict[str, Any]
+) -> None:
+    """
+    Print comprehensive startup information including configuration and status.
+
+    Args:
+        dir_status: Directory status information
+        server_config: Server configuration
+        env_config: Environment configuration
+    """
+    # Import at function level to avoid circular import
+    try:
+        from server.main import APP_TITLE, APP_VERSION
+
+        app_title = APP_TITLE
+        app_version = APP_VERSION
+    except ImportError:
+        # Fallback values in case of circular import
+        app_title = "AppDaemon Documentation Server"
+        app_version = "1.0.0"
+
+    print(f"Starting {app_title} v{app_version}...")
+    print(f"Apps directory: {dir_status.apps_dir}")
+    print(f"Documentation directory: {dir_status.docs_dir}")
+    print(f"Server will be available at: http://{server_config['host']}:{server_config['port']}")
+    print()
+
+    # Configuration section
+    print("Configuration:")
+    print(f"  HOST={server_config['host']}")
+    print(f"  PORT={server_config['port']}")
+    print(f"  RELOAD={server_config['reload']}")
+    print(f"  LOG_LEVEL={server_config['log_level']}")
+    print(f"  FORCE_REGENERATE={env_config['force_regenerate']}")
+    print(f"  ENABLE_FILE_WATCHER={env_config['enable_file_watcher']}")
+    print(f"  WATCH_DEBOUNCE_DELAY={env_config['watch_debounce_delay']}")
+    print()
+
+    # Directory status section
+    if not dir_status.apps_exists:
+        print(f"⚠️  Warning: Apps directory not found at {dir_status.apps_dir}")
+        print("         Auto-generation will be skipped")
+    else:
+        print(f"📁 Found {dir_status.apps_count} automation files to process")
+
+    if not dir_status.docs_exists:
+        print(f"⚠️  Documentation directory will be created at {dir_status.docs_dir}")
+    else:
+        print(f"📚 Found {dir_status.docs_count} existing documentation files")
+
+    print()
+
+    # Features section
+    print("Features enabled:")
+    print(f"  🚀 Auto-generation on startup: {'Yes' if dir_status.apps_exists else 'No (apps dir missing)'}")
+    print(f"  👀 File watcher: {'Yes' if env_config['enable_file_watcher'] else 'No'}")
+    print("  🔄 WebSocket real-time updates: Yes")
+    print("  🔍 Full-text search: Yes")
+    print()
+
+
+class DirectoryStatus:
+    """Helper class to encapsulate directory status information."""
+
+    def __init__(self, apps_dir: Path, docs_dir: Path) -> None:
+        """
+        Initialize directory status.
+
+        Args:
+            apps_dir: Path to apps directory
+            docs_dir: Path to docs directory
+        """
+        self.apps_dir = apps_dir
+        self.docs_dir = docs_dir
+        self.apps_exists = apps_dir.exists()
+        self.docs_exists = docs_dir.exists()
+        self.apps_count = count_automation_files(apps_dir) if self.apps_exists else 0
+        self.docs_count = count_documentation_files(docs_dir) if self.docs_exists else 0
+
+    def log_status(self, logger: Any) -> None:
+        """
+        Log directory status information.
+
+        Args:
+            logger: Logger instance
+        """
+        if not self.apps_exists:
+            logger.error(f"Apps directory not found: {self.apps_dir}")
+        else:
+            logger.info(f"Found {self.apps_count} automation files to process")
+
+        if not self.docs_exists:
+            logger.warning(f"Documentation directory will be created at {self.docs_dir}")
+        else:
+            logger.info(f"📚 Documentation ready: {self.docs_count} files available")

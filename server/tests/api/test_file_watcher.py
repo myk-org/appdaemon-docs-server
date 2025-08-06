@@ -26,8 +26,8 @@ class TestWatchConfig:
         """Test default configuration values."""
         config = WatchConfig()
 
-        assert config.watch_directory == Path("../apps")
-        assert config.output_directory == Path("../apps/docs")
+        assert config.watch_directory == Path("/app/appdaemon-apps")
+        assert config.output_directory == Path("/app/docs")
         assert config.debounce_delay == 2.0
         assert config.max_retry_attempts == 3
         assert config.retry_delay == 1.0
@@ -205,11 +205,12 @@ class TestDebounceHandler:
 class TestFileWatcher:
     """Test the main FileWatcher functionality."""
 
-    def setup_method(self):
+    @pytest.fixture(autouse=True)
+    def setup_method(self, tmp_path):
         """Set up test environment."""
-        self.temp_dir = tempfile.mkdtemp()
-        self.watch_dir = Path(self.temp_dir) / "apps"
-        self.docs_dir = Path(self.temp_dir) / "docs"
+        self.temp_dir = tmp_path
+        self.watch_dir = self.temp_dir / "apps"
+        self.docs_dir = self.temp_dir / "docs"
 
         # Create directories
         self.watch_dir.mkdir(parents=True)
@@ -227,7 +228,9 @@ class TestFileWatcher:
 
     def test_should_process_file(self):
         """Test file filtering logic."""
-        watcher = FileWatcher(self.config)
+        with patch("server.watchers.file_watcher.BatchDocGenerator") as mock_gen:
+            mock_gen.return_value = Mock()
+            watcher = FileWatcher(self.config)
 
         # Should process Python files
         assert watcher._should_process_file(self.watch_dir / "automation.py")
@@ -254,8 +257,9 @@ class TestFileWatcher:
         (self.watch_dir / "const.py").write_text("# Excluded file")
         (self.watch_dir / "config.yaml").write_text("# Non-Python file")
 
-        watcher = FileWatcher(self.config)
-        watcher._scan_existing_files()
+        with patch("server.watchers.file_watcher.BatchDocGenerator"):
+            watcher = FileWatcher(self.config)
+            watcher._scan_existing_files()
 
         # Should find only the automation files
         assert len(watcher.watched_files) == 2
@@ -265,7 +269,8 @@ class TestFileWatcher:
 
     def test_get_status(self):
         """Test status reporting."""
-        watcher = FileWatcher(self.config)
+        with patch("server.watchers.file_watcher.BatchDocGenerator"):
+            watcher = FileWatcher(self.config)
 
         status = watcher.get_status()
 
@@ -290,7 +295,8 @@ class TestFileWatcher:
 
     def test_callback_registration(self):
         """Test generation callback registration."""
-        watcher = FileWatcher(self.config)
+        with patch("server.watchers.file_watcher.BatchDocGenerator"):
+            watcher = FileWatcher(self.config)
         callback_mock = Mock()
 
         # Add callback
@@ -314,7 +320,8 @@ class TestFileWatcher:
 
     def test_get_recent_events(self):
         """Test getting recent events."""
-        watcher = FileWatcher(self.config)
+        with patch("server.watchers.file_watcher.BatchDocGenerator"):
+            watcher = FileWatcher(self.config)
 
         # Add some test events
         for i in range(5):
@@ -332,7 +339,8 @@ class TestFileWatcher:
 
     def test_get_recent_results(self):
         """Test getting recent generation results."""
-        watcher = FileWatcher(self.config)
+        with patch("server.watchers.file_watcher.BatchDocGenerator"):
+            watcher = FileWatcher(self.config)
 
         # Add some test results
         for i in range(5):
@@ -356,7 +364,8 @@ class TestFileWatcher:
 
     def test_get_error_summary(self):
         """Test getting error summary."""
-        watcher = FileWatcher(self.config)
+        with patch("server.watchers.file_watcher.BatchDocGenerator"):
+            watcher = FileWatcher(self.config)
 
         # Add some error data
         file1 = Path("/test/file1.py")
@@ -378,17 +387,6 @@ class TestFileWatcher:
         assert summary[str(file1)]["last_error"] == "Syntax error"
         assert summary[str(file2)]["error_count"] == 1
         assert summary[str(file2)]["last_error"] == "Import error"
-
-
-@pytest.mark.asyncio
-async def test_integration_example():
-    """Test that the integration example can be imported without errors."""
-    try:
-        from server.watchers.integration_example import app
-
-        assert app is not None
-    except ImportError as e:
-        pytest.skip(f"Integration example not importable: {e}")
 
 
 # Performance test
@@ -445,8 +443,3 @@ async def test_high_volume_events():
         # Verify some events were processed (exact number depends on debouncing)
         assert events_processed > 0
         assert events_processed <= len(test_files)  # Should not exceed due to debouncing
-
-
-if __name__ == "__main__":
-    # Run tests
-    pytest.main([__file__, "-v"])

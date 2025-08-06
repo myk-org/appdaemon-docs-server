@@ -1,241 +1,350 @@
 # AppDaemon Documentation Server
 
-Containerized documentation service that automatically generates comprehensive documentation from your AppDaemon automation files. Features real-time file monitoring, a modern web interface, and zero-configuration deployment.
+FastAPI-based documentation web server that automatically generates comprehensive documentation from your AppDaemon automation files. Features real-time file monitoring, modern web interface, and AI agent integration through MCP (Model Context Protocol).
 
 ## Overview
 
-This Docker-based service transforms your AppDaemon Python automation files into beautiful, searchable documentation with automatic generation, real-time updates, and professional presentation. Simply mount your AppDaemon apps directory and access instant documentation through a responsive web interface.
+This containerized service transforms your AppDaemon Python automation files into beautiful, searchable documentation with automatic generation, real-time updates, and professional presentation. The service provides both web-based access and programmatic access through MCP for AI agents.
 
 ## Key Features
 
-- 🐳 **Docker-Only Deployment** - Production-ready containerized service, no local Python setup required
 - 🚀 **Auto-Generation** - Automatically creates documentation from AppDaemon Python files on startup
 - 👀 **Real-Time Monitoring** - Watches for file changes and regenerates documentation automatically
 - 🔄 **Live Updates** - WebSocket integration provides instant notifications of changes
-- 📱 **Mobile Responsive** - Modern web interface that works on all devices
+- 📱 **Modern Web Interface** - Responsive design with syntax highlighting and search
 - 🔍 **Full-Text Search** - Built-in search functionality across all documentation
-- 📊 **Mermaid Diagrams** - Automatic generation of architecture and flow diagrams
-- 🎨 **Professional UI** - Clean, modern interface with dark/light theme support
+- 🤖 **MCP Integration** - AI agent support through Model Context Protocol
 - 📈 **Health Monitoring** - Comprehensive status reporting and error tracking
+- 🎨 **CSS Foundation** - Cross-browser compatibility with normalize, custom properties, and optimized typography
+- 🐳 **Docker Ready** - Production-ready containerized deployment
 
 ## Quick Start
 
-### 1. Clone the Repository
+### Local Development
+
+For local development and testing:
 
 ```bash
-git https://github.com/myk-org/appdaemon-docs-server
+git clone <repository-url>
 cd appdaemon-docs-server
+uv sync
 ```
 
-### 2. Build the Docker Image
+Create a `.dev_env` file with your configuration:
+
+```bash
+# Example .dev_env file
+APPS_DIR=/path/to/your/appdaemon/apps
+HOST=127.0.0.1
+PORT=8080
+LOG_LEVEL=info
+RELOAD=true
+FORCE_REGENERATE=false
+ENABLE_FILE_WATCHER=true
+WATCH_DEBOUNCE_DELAY=2.0
+```
+
+Run the development server:
+
+```bash
+uv run server/run-dev.py
+```
+
+The server will be available at <http://127.0.0.1:8080>
+
+See [DEVELOPMENT.md](DEVELOPMENT.md) for detailed local development instructions.
+
+### Production Deployment with Docker
+
+#### 1. Build the Docker Image
 
 ```bash
 docker build -t appdaemon-docs-server .
 ```
 
-### 3. Run with Docker
+#### 2. Run with Docker
 
 ```bash
 docker run -d \
   --name appdaemon-docs \
   -p 8080:8080 \
+  -e APPS_DIR=/app/appdaemon-apps \
   -v /path/to/your/appdaemon/apps:/app/appdaemon-apps:ro \
   appdaemon-docs-server
 ```
 
-### 4. Run with Docker Compose (Recommended)
+#### 3. Run with Docker Compose (Recommended)
 
-Copy the provided `docker-compose.yml` file and customize the volume path:
+Use the provided `docker-compose.yml` file and customize the volume path:
+
+```yaml
+services:
+  appdaemon-docs-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: appdaemon-docs-server
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - /path/to/your/appdaemon/apps:/app/appdaemon-apps:ro
+    environment:
+      - APPS_DIR=/app/appdaemon-apps
+      - HOST=0.0.0.0
+      - PORT=8080
+      - LOG_LEVEL=info
+      - FORCE_REGENERATE=false
+      - ENABLE_FILE_WATCHER=true
+      - WATCH_DEBOUNCE_DELAY=2.0
+```
+
+Start the service:
 
 ```bash
-# Edit docker-compose.yml to set your AppDaemon apps path
 docker compose up -d
 ```
 
-**Podman users:**
-
-```bash
-podman-compose up -d
-# or
-podman compose up -d  # (if using podman 4.0+)
-```
-
-See the [docker-compose.yml](./docker-compose.yml) file for a complete example with all configuration options.
-
-## How It Works
-
-1. **Mount Your Apps** - Point the container to your AppDaemon apps directory
-2. **Automatic Scanning** - Service discovers all Python automation files
-3. **Documentation Generation** - Creates comprehensive markdown documentation
-4. **Web Interface** - Access your docs at <http://localhost:8080>
-5. **Live Updates** - Changes to your Python files automatically regenerate docs
+Access your documentation at <http://localhost:8080>
 
 ## Configuration
 
 All configuration is handled through environment variables:
 
-### Core Settings
+### Required Environment Variables
 
-| Variable    | Default   | Description                                 |
-| ----------- | --------- | ------------------------------------------- |
-| `HOST`      | `0.0.0.0` | Server bind address                         |
-| `PORT`      | `8080`    | Server port                                 |
-| `LOG_LEVEL` | `info`    | Logging level (debug, info, warning, error) |
+| Variable   | Description                                      | Example                        |
+| ---------- | ------------------------------------------------ | ------------------------------ |
+| `APPS_DIR` | Path to AppDaemon source files                   | `/app/appdaemon-apps`          |
 
-### Directory Configuration
+### Optional Environment Variables
 
-| Variable   | Default               | Description                                      |
-| ---------- | --------------------- | ------------------------------------------------ |
-| `APPS_DIR` | `/app/appdaemon-apps` | Container mount point for AppDaemon source files |
-| `DOCS_DIR` | `/app/docs`           | Generated documentation directory (auto-created) |
+| Variable               | Default    | Description                                      |
+| ---------------------- | ---------- | ------------------------------------------------ |
+| `HOST`                 | `0.0.0.0`  | Server bind address                              |
+| `PORT`                 | `8080`     | Server port                                      |
+| `LOG_LEVEL`            | `info`     | Logging level (debug, info, warning, error)     |
+| `RELOAD`               | `false`    | Enable auto-reload for development              |
+| `FORCE_REGENERATE`     | `false`    | Force regenerate all docs on startup            |
+| `ENABLE_FILE_WATCHER`  | `true`     | Enable real-time file monitoring                |
+| `WATCH_DEBOUNCE_DELAY` | `2.0`      | Delay before processing file changes (seconds)  |
+| `WATCH_MAX_RETRIES`    | `3`        | Maximum retry attempts for failed generations   |
+| `WATCH_FORCE_REGENERATE` | `false`  | Force regenerate on file changes                |
+| `WATCH_LOG_LEVEL`      | `INFO`     | File watcher log level                           |
+| `APP_TITLE`            | `AppDaemon Documentation Server` | Application title |
+| `APP_DESCRIPTION`      | `Web interface for AppDaemon...` | Application description |
 
-### Generation Settings
+## How It Works
 
-| Variable               | Default | Description                                    |
-| ---------------------- | ------- | ---------------------------------------------- |
-| `FORCE_REGENERATE`     | `false` | Force regenerate all docs on startup           |
-| `ENABLE_FILE_WATCHER`  | `true`  | Enable real-time file monitoring               |
-| `WATCH_DEBOUNCE_DELAY` | `2.0`   | Delay before processing file changes (seconds) |
-
-### Production Example
-
-```yaml
-version: "3.8"
-services:
-  docs-server:
-    image: appdaemon-docs-server
-    container_name: appdaemon-docs
-    ports:
-      - "8080:8080"
-    volumes:
-      - /opt/appdaemon/apps:/app/appdaemon-apps:ro
-    environment:
-      - LOG_LEVEL=warning
-      - FORCE_REGENERATE=false
-      - ENABLE_FILE_WATCHER=true
-      - WATCH_DEBOUNCE_DELAY=3.0
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-        reservations:
-          memory: 256M
-```
-
-## Service Architecture
-
-### Startup Process
-
-1. **Container Initialization** - Service starts and validates configuration
-2. **Directory Setup** - Creates documentation output directory
-3. **File Discovery** - Scans apps directory for Python automation files
-4. **Batch Generation** - Generates documentation for all discovered files
-5. **File Watcher** - Starts monitoring for changes
-6. **Web Server** - Launches FastAPI server with documentation interface
-
-### Real-Time Updates
-
-- **File Monitoring** - Detects changes to Python files
-- **Debounced Processing** - Prevents excessive regeneration during rapid changes
-- **WebSocket Notifications** - Broadcasts updates to connected clients
-- **Automatic Refresh** - Browser automatically updates when documentation changes
+1. **Startup** - Service scans your AppDaemon apps directory for Python files
+2. **Generation** - Creates comprehensive markdown documentation for each automation file
+3. **Web Interface** - Serves documentation through FastAPI with modern UI
+4. **File Watching** - Monitors for changes and regenerates documentation automatically
+5. **Real-time Updates** - WebSocket connections notify browsers of changes instantly
 
 ## Web Interface
 
-### Documentation Browser
+### Main Features
 
-- **File List** - Browse all generated documentation files
+- **Documentation Index** - Browse all generated documentation files at `/docs/`
+- **Individual Files** - View specific documentation at `/docs/{filename}`
 - **Search** - Full-text search across all documentation
-- **Syntax Highlighting** - Code blocks with proper Python highlighting
-- **Mobile Responsive** - Optimized for phones and tablets
+- **Syntax Highlighting** - Python code blocks with proper formatting
+- **Responsive Design** - Works on desktop, tablet, and mobile devices
 
-### Features
+### Available Pages
 
-- **Mermaid Diagrams** - Automatic architecture and flow diagrams
-- **Code Analysis** - Function signatures, class hierarchies, and dependencies
-- **Cross-References** - Links between related automation files
-- **Error Reporting** - Clear indication of generation issues
+- `/` - Redirects to documentation index
+- `/docs/` - Main documentation index page
+- `/docs/{filename}` - Individual documentation file viewer
+- `/health` - Service health check endpoint
 
 ## API Endpoints
 
-### Health and Status
+### Core API
 
 ```bash
-# Service health check
-GET /health
+# Health and status
+GET /health                          # Service health check
+GET /api/watcher/status             # File watcher status
+GET /api/ws/status                  # WebSocket connection status
 
-# File watcher status
-GET /api/watcher/status
+# Documentation access
+GET /api/files                      # List all documentation files
+GET /api/file/{filename}            # Get processed file content
+GET /api/search?q=query            # Search documentation
 
-# WebSocket connection status
-GET /api/ws/status
+# Manual operations
+POST /api/generate/all?force=true   # Force regenerate all documentation
+POST /api/generate/file/{filename}?force=true  # Regenerate specific file
 ```
 
-### Documentation Access
+### WebSocket
 
 ```bash
-# Main documentation index
-GET /docs/
-
-# Specific documentation file
-GET /docs/{filename}
-
-# Search documentation
-GET /api/search?q=query
-
-# List all files
-GET /api/files
+# Real-time updates
+WS /ws                              # WebSocket for live updates
 ```
 
-### Manual Operations
+### MCP Integration
 
 ```bash
-# Force regenerate all documentation
-POST /api/generate/all?force=true
-
-# Regenerate specific file
-POST /api/generate/file/{filename}?force=true
+# Model Context Protocol for AI agents
+GET/POST /mcp/                      # MCP HTTP endpoint
+GET /mcp/sse                        # MCP Server-Sent Events
 ```
 
-## Monitoring
+## MCP Integration for AI Agents
 
-### Health Check Responses
+The service includes built-in Model Context Protocol (MCP) support for AI agent integration.
+
+### Available MCP Tools
+
+The server automatically generates MCP tools from FastAPI endpoints with short, descriptive names:
+
+- **health** - Check server health and status
+- **list_files** - List all available documentation files
+- **get_file** - Get content of a specific documentation file
+- **search_docs** - Search through documentation content
+- **generate_all** - Regenerate all documentation files
+- **generate_file** - Regenerate a specific documentation file
+- **ws_status** - Get WebSocket connection status
+- **watcher_status** - Get file watcher status
+- **broadcast_test** - Send test message to WebSocket clients
+
+Tool names are based on custom operation IDs for brevity and clarity.
+
+### Connecting AI Agents
+
+To connect an MCP-compatible AI agent:
+
+1. **Verify server is running:**
+   ```bash
+   # Check server health
+   curl http://your-server-ip:port/health
+
+   # Test MCP connection directly
+   npx mcp-remote your-server-ip:port/mcp --allow-http
+   ```
+
+2. **Configure Claude Code CLI** with the MCP server:
+
+   **For Local Server:**
+   ```json
+   {
+     "mcpServers": {
+       "appdaemon-docs-local": {
+         "command": "npx",
+         "args": [
+           "mcp-remote",
+           "http://localhost:8080/mcp"
+         ]
+       }
+     }
+   }
+   ```
+
+   **For Remote Server:**
+   ```json
+   {
+     "mcpServers": {
+       "appdaemon-docs": {
+         "command": "npx",
+         "args": [
+           "mcp-remote",
+           "http://your-server-ip:port/mcp",
+           "--allow-http"
+         ]
+       }
+     }
+   }
+   ```
+
+   **Note:** The `--allow-http` flag is required when connecting to remote HTTP servers (non-HTTPS).
+
+3. **Test the connection** by asking Claude to list your automation files
+
+### Benefits for AI Assistance
+
+- **Code Understanding** - AI can analyze your automation logic and suggest improvements
+- **Documentation Search** - Natural language queries to find relevant automations
+- **Development Help** - Get assistance with debugging and new automation patterns
+- **Architecture Analysis** - Understand relationships between automation modules
+
+## Testing
+
+The project includes comprehensive test suites:
+
+### Running Tests
+
+```bash
+# Run all tests
+uv run pytest
+
+# Run specific test categories
+uv run pytest server/tests/api/        # API functionality tests
+uv run pytest server/tests/ui/         # UI and accessibility tests
+
+# Run with coverage
+uv run pytest --cov=server
+```
+
+### Test Categories
+
+- **API Tests** - Documentation generation, file watching, and API endpoints
+- **UI Tests** - Color contrast, accessibility, and interface functionality using Playwright
+
+## Monitoring and Health Checks
+
+### Health Check Response
+
+```json
+{
+  "status": "healthy",
+  "service": "appdaemon-docs-server",
+  "version": "1.0.0",
+  "docs_directory_exists": true,
+  "apps_directory_exists": true,
+  "docs_files_count": 45,
+  "startup_generation_completed": true,
+  "file_watcher_active": true,
+  "startup_errors_count": 0,
+  "startup_errors": [],
+  "uptime": "running"
+}
+```
+
+### Status Values
 
 - `healthy` - Service operational, documentation current
 - `starting` - Service initializing, generation in progress
 - `degraded` - Service operational with some generation errors
 - `unhealthy` - Critical errors preventing operation
 
-### Log Levels
-
-- `debug` - Detailed processing information
-- `info` - General operational status
-- `warning` - Non-critical issues
-- `error` - Critical errors requiring attention
-
 ### Monitoring Commands
 
 ```bash
-# Check service health
-curl -s http://localhost:8080/health | jq
+# Check overall health
+curl http://localhost:8080/health
 
 # Monitor file watcher
-curl -s http://localhost:8080/api/watcher/status | jq
+curl http://localhost:8080/api/watcher/status
 
-# View documentation count
-curl -s http://localhost:8080/api/files | jq '.files | length'
+# Check WebSocket status
+curl http://localhost:8080/api/ws/status
+
+# Count documentation files
+curl http://localhost:8080/api/files | jq '.total_count'
 ```
 
-### Debug Mode
+## Performance and Resource Requirements
 
-Enable detailed logging:
+### System Requirements
 
-```yaml
-environment:
-  - LOG_LEVEL=debug
-  - WATCH_LOG_LEVEL=DEBUG
-```
+- **CPU**: 1+ cores (2+ recommended for production)
+- **Memory**: 256MB minimum, 512MB recommended
+- **Storage**: 100MB + size of generated documentation
+- **Network**: HTTP/HTTPS access for web interface
 
 ### Performance Tuning
 
@@ -243,76 +352,52 @@ For large AppDaemon installations:
 
 ```yaml
 environment:
-  - WATCH_DEBOUNCE_DELAY=5.0 # Reduce CPU usage
-  - FORCE_REGENERATE=false # Faster startups
+  - WATCH_DEBOUNCE_DELAY=5.0     # Reduce CPU usage during file changes
+  - FORCE_REGENERATE=false       # Faster startup times
+  - LOG_LEVEL=warning            # Reduce log verbosity
 ```
 
 ## Security Considerations
 
-- **Read-Only Mounts** - Always mount apps directory as read-only (`:ro`)
-- **Network Access** - Consider restricting container network access
-- **User Permissions** - Run container with non-root user when possible
-- **File Permissions** - Ensure AppDaemon files have appropriate permissions
+- **Read-Only Mounts** - Always mount AppDaemon apps directory as read-only (`:ro`)
+- **Non-Root User** - Container runs as non-root user (UID 1000)
+- **Network Access** - Consider firewall rules for port 8080
+- **MCP Access** - MCP integration provides full API access including documentation regeneration capabilities
 
-## Integration Examples
+## Troubleshooting
 
-### Home Assistant Add-on
+### Common Issues
+
+**Service won't start:**
+- Check that `APPS_DIR` environment variable is set
+- Verify the apps directory exists and is readable
+- Check Docker logs: `docker logs appdaemon-docs-server`
+
+**Documentation not generating:**
+- Ensure AppDaemon files exist in the mounted directory
+- Check file permissions on the apps directory
+- Force regeneration: `curl -X POST http://localhost:8080/api/generate/all?force=true`
+
+**File watcher not working:**
+- Verify `ENABLE_FILE_WATCHER=true` is set
+- Check watcher status: `curl http://localhost:8080/api/watcher/status`
+- Review container logs for file system events
+
+**MCP integration issues:**
+- Test MCP endpoint: `curl http://localhost:8080/mcp/`
+- Verify AI agent configuration includes correct URL
+- Check server logs for MCP-related errors
+
+### Debug Mode
+
+Enable detailed logging for troubleshooting:
 
 ```yaml
-# configuration.yaml
-services:
-  appdaemon:
-    image: acockburn/appdaemon:latest
-    volumes:
-      - /config/appdaemon:/conf
-
-  docs-server:
-    image: appdaemon-docs-server
-    ports:
-      - "8080:8080"
-    volumes:
-      - /config/appdaemon/apps:/app/appdaemon-apps:ro
-    depends_on:
-      - appdaemon
+environment:
+  - LOG_LEVEL=debug
+  - WATCH_LOG_LEVEL=DEBUG
 ```
 
-### Reverse Proxy
-
-```nginx
-# nginx.conf
-location /appdaemon-docs/ {
-    proxy_pass http://localhost:8080/;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-
-    # WebSocket support
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
-}
-```
-
-## Resource Requirements
-
-### Minimum Requirements
-
-- **CPU**: 1 core
-- **Memory**: 256MB RAM
-- **Storage**: 100MB + documentation size
-- **Network**: HTTP/HTTPS access
-
-### Recommended for Production
-
-- **CPU**: 2 cores
-- **Memory**: 512MB RAM
-- **Storage**: 1GB + documentation size
-- **Network**: Reverse proxy with SSL
-
-## Support and Contributing
-
-This is a production-ready service designed for containerized deployment. For issues, feature requests, or contributions, please follow standard Docker best practices and FastAPI development patterns.
 
 ## License
 

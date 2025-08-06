@@ -9,16 +9,17 @@ with technical overviews, architecture diagrams, and flow charts.
 from pathlib import Path
 from typing import Any
 
-from generators.diagram_generator import quick_flow, create_architecture_diagram, create_method_flow_diagram
-from parsers.appdaemon_parser import ClassInfo, ParsedFile, parse_appdaemon_file
+from server.generators.diagram_generator import create_architecture_diagram, create_method_flow_diagram, quick_flow
+from server.parsers.appdaemon_parser import ClassInfo, ParsedFile
 
 
 class AppDaemonDocGenerator:
     """Generates markdown documentation for AppDaemon automation files."""
 
-    def __init__(self) -> None:
+    def __init__(self, docs_dir: str | None = None) -> None:
         """Initialize the documentation generator."""
         self.constants_map = self._load_constants_map()
+        self.docs_dir = Path(docs_dir) if docs_dir else None
 
     def generate_documentation(self, parsed_file: ParsedFile) -> str:
         """
@@ -40,8 +41,7 @@ class AppDaemonDocGenerator:
         # Technical overview
         sections.append(self._generate_technical_overview(parsed_file))
 
-        # Architecture diagram
-        sections.append(self._generate_architecture_diagram(parsed_file))
+        # Architecture diagram removed - replaced with enhanced technical overview
 
         # Generate logic flow diagrams for key methods
         sections.append(self._generate_logic_flow_diagrams(parsed_file))
@@ -72,11 +72,20 @@ class AppDaemonDocGenerator:
 
         header = f"# {title}\n\n"
 
+        # Add documentation file path
+        if self.docs_dir:
+            doc_path = self.docs_dir / f"{file_name}.md"
+            header += f"> **Documentation:** `{doc_path}`  \n"
+        else:
+            header += f"> **Documentation:** `apps/docs/{file_name}.md`  \n"
+
         if main_class:
             header += f"> **Class:** `{main_class.name}`  \n"
             if main_class.base_classes:
                 header += f"> **Base Classes:** `{', '.join(main_class.base_classes)}`  \n"
             header += f"> **Module:** `{Path(parsed_file.file_path).name}`\n\n"
+        else:
+            header += "\n"
 
         header += "## Overview\n\n"
 
@@ -88,7 +97,7 @@ class AppDaemonDocGenerator:
         return header
 
     def _generate_technical_overview(self, parsed_file: ParsedFile) -> str:
-        """Generate technical overview section matching climate.md format."""
+        """Generate enhanced technical overview with collapsible sections."""
         section = "## Technical Overview\n\n"
 
         # Architecture bullet points like climate.md
@@ -99,15 +108,30 @@ class AppDaemonDocGenerator:
 
         # Count state listeners across all classes
         total_listeners = sum(len(cls.state_listeners) for cls in parsed_file.classes)
-        section += f"- **Initialization:** {total_listeners} state listeners configured\n"
+        initialization_details = self._get_initialization_details(parsed_file)
+        section += f"- **Initialization:** {total_listeners} state listeners configured"
+        if initialization_details:
+            section += f"\n  <details>\n  <summary>Show Details</summary>\n\n{initialization_details}\n  </details>\n"
+        else:
+            section += "\n"
 
         # Count methods across all classes
         total_methods = sum(len(cls.methods) for cls in parsed_file.classes)
-        section += f"- **Methods:** {total_methods} total methods\n"
+        methods_details = self._get_methods_details(parsed_file)
+        section += f"- **Methods:** {total_methods} total methods"
+        if methods_details:
+            section += f"\n  <details>\n  <summary>Show Details</summary>\n\n{methods_details}\n  </details>\n"
+        else:
+            section += "\n"
 
         # Count callback methods
         total_callbacks = sum(len([m for m in cls.methods if m.is_callback]) for cls in parsed_file.classes)
-        section += f"- **Callbacks:** {total_callbacks} callback methods\n"
+        callbacks_details = self._get_callbacks_details(parsed_file)
+        section += f"- **Callbacks:** {total_callbacks} callback methods"
+        if callbacks_details:
+            section += f"\n  <details>\n  <summary>Show Details</summary>\n\n{callbacks_details}\n  </details>\n"
+        else:
+            section += "\n"
 
         # Performance monitoring detection
         has_performance_monitoring = any(
@@ -660,42 +684,66 @@ class AppDaemonDocGenerator:
         # This could be enhanced to actually parse const.py and build a real mapping
         return {}
 
+    def _get_initialization_details(self, parsed_file: ParsedFile) -> str:
+        """Generate detailed initialization information for collapsible section."""
+        details = ""
 
-def generate_appdaemon_docs(file_path: str | Path, output_path: str | Path | None = None) -> str:
-    """
-    Generate documentation for an AppDaemon file.
+        for class_info in parsed_file.classes:
+            if class_info.state_listeners:
+                for listener in class_info.state_listeners:
+                    details += f'  - `listen_state({listener.callback_method}, "{listener.entity}")`\n'
 
-    Args:
-        file_path: Path to the AppDaemon Python file
-        output_path: Optional path to save the generated documentation
+            if class_info.mqtt_listeners:
+                for mqtt in class_info.mqtt_listeners:
+                    details += f'  - `listen_event({mqtt.callback_method}, "{mqtt.topic}")`\n'
 
-    Returns:
-        Generated markdown documentation
-    """
+            if class_info.time_schedules:
+                for schedule in class_info.time_schedules:
+                    if schedule.schedule_type == "run_daily":
+                        details += f'  - `run_daily({schedule.callback_method}, "{schedule.time_spec}")`\n'
+                    elif schedule.schedule_type == "run_every":
+                        details += f"  - `run_every({schedule.callback_method}, {schedule.interval})`\n"
+                    else:
+                        details += f"  - `{schedule.schedule_type}({schedule.callback_method})`\n"
 
-    # Parse the file
-    parsed_file = parse_appdaemon_file(file_path)
+        return details.strip()
 
-    # Generate documentation
-    generator = AppDaemonDocGenerator()
-    docs = generator.generate_documentation(parsed_file)
+    def _get_methods_details(self, parsed_file: ParsedFile) -> str:
+        """Generate detailed methods information for collapsible section."""
+        details = ""
 
-    # Save if output path provided
-    if output_path:
-        Path(output_path).write_text(docs, encoding="utf-8")
+        for class_info in parsed_file.classes:
+            for method in class_info.methods:
+                if method.name == "initialize":
+                    details += f"  - `{method.name}()` - AppDaemon initialization\n"
+                elif method.is_callback:
+                    # Skip callbacks here, they have their own section
+                    continue
+                else:
+                    action_summary = self._create_method_action_summary(method)
+                    purpose = action_summary if action_summary != "Processing" else "Helper method"
+                    details += f"  - `{method.name}()` - {purpose}\n"
 
-    return docs
+        return details.strip()
 
+    def _get_callbacks_details(self, parsed_file: ParsedFile) -> str:
+        """Generate detailed callbacks information for collapsible section."""
+        details = ""
 
-if __name__ == "__main__":
-    # Example usage
-    sample_files = ["../apps/climate.py", "../apps/entrance.py", "../apps/motion_sensors.py"]
+        for class_info in parsed_file.classes:
+            for method in class_info.methods:
+                if method.is_callback:
+                    action_summary = self._create_method_action_summary(method)
+                    # Find the entities this callback handles
+                    entities = []
+                    for listener in class_info.state_listeners:
+                        if listener.callback_method == method.name:
+                            entities.append(listener.entity)
 
-    for file_path in sample_files:
-        try:
-            output_file = f"../apps/docs/{Path(file_path).stem}.md"
-            docs = generate_appdaemon_docs(file_path, output_file)
-            print(f"Generated documentation for {file_path} -> {output_file}")
-            print(f"Preview (first 500 chars):\n{docs[:500]}...\n")
-        except Exception as e:
-            print(f"Error generating docs for {file_path}: {e}")
+                    entity_text = f" - {', '.join([e for e in entities[:2] if e is not None])}" if entities else ""
+                    if len(entities) > 2:
+                        entity_text += f" (+{len(entities) - 2} more)"
+
+                    details += f"  - `{method.name}()` - {action_summary}{entity_text}\n"
+
+        return details.strip()

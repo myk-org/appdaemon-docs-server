@@ -13,17 +13,28 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-import markdown
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from fastapi_mcp import FastApiMCP
 from pygments.formatters import HtmlFormatter
 
-from websocket.websocket_manager import websocket_manager, EventType, WebSocketEvent
-from generators.batch_doc_generator import BatchDocGenerator
-from watchers.file_watcher import FileWatcher, WatchConfig
+from server.generators.batch_doc_generator import BatchDocGenerator
+from server.processors.markdown import MarkdownProcessor
+from server.services.docs import DocumentationService
+from server.utils.utils import (
+    DirectoryStatus,
+    get_environment_config,
+    get_server_config,
+    print_startup_info,
+)
+from server.watchers.file_watcher import FileWatcher, WatchConfig
+from server.websocket.websocket_manager import EventType, WebSocketEvent, websocket_manager
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Configure logging with environment variable support
 log_level = os.getenv("LOG_LEVEL", "info").upper()
@@ -39,101 +50,208 @@ APP_DESCRIPTION = os.getenv(
 
 
 # Base paths - resolve at startup for better performance
-DOCS_DIR = Path(os.getenv("DOCS_DIR", "/app/docs")).resolve()
-APPS_DIR = Path(os.getenv("APPS_DIR", "/app/appdaemon-apps")).resolve()
-TEMPLATES_DIR = Path("templates")
-STATIC_DIR = Path("static")
+APPS_DIR_FROM_ENV = os.getenv("APPS_DIR")
+
+if not APPS_DIR_FROM_ENV:
+    raise ValueError("APPS_DIR environment variable not set")
+
+APPS_DIR = Path(APPS_DIR_FROM_ENV).resolve()
+DOCS_DIR = Path(os.getenv("DOCS_DIR", "data/generated-docs")).resolve()
+TEMPLATES_DIR = Path(os.getenv("TEMPLATES_DIR", "server/templates")).resolve()
+STATIC_DIR = Path(os.getenv("STATIC_DIR", "server/static")).resolve()
 
 # Global components for startup integration
 file_watcher: FileWatcher | None = None
 startup_generation_completed = False
 startup_errors: list[str] = []
-
-# Markdown configuration for optimal rendering
-MARKDOWN_EXTENSIONS = [
-    "codehilite",
-    "toc",
-    "tables",
-    "fenced_code",
-    "markdown.extensions.attr_list",
-    "markdown.extensions.def_list",
-    "markdown.extensions.footnotes",
-]
-
-MARKDOWN_EXTENSION_CONFIGS = {
-    "codehilite": {
-        "css_class": "highlight",
-        "use_pygments": True,
-        "noclasses": False,
-    },
-    "toc": {
-        "title": "Table of Contents",
-        "anchorlink": True,
-    },
-}
-
-
-class MarkdownProcessor:
-    """High-performance markdown processor with caching."""
-
-    def __init__(self) -> None:
-        """Initialize markdown processor with optimized configuration."""
-        self.md = markdown.Markdown(
-            extensions=MARKDOWN_EXTENSIONS,
-            extension_configs=MARKDOWN_EXTENSION_CONFIGS,
-        )
-        self._cache: dict[tuple[str, int], str] = {}
-        self._max_cache_size = 128
-
-    def process_file(self, file_path: str, content_hash: int) -> str:
-        """
-        Process markdown file with instance caching for performance.
-
-        Args:
-            file_path: Path to the markdown file
-            content_hash: Hash of file content for cache invalidation
-
-        Returns:
-            Rendered HTML content
-        """
-        cache_key = (file_path, content_hash)
-
-        # Check cache first
-        if cache_key in self._cache:
-            return self._cache[cache_key]
-
-        try:
-            with open(file_path, encoding="utf-8") as f:
-                content = f.read()
-
-            # Reset markdown instance for clean processing
-            self.md.reset()
-            html_content = str(self.md.convert(content))
-
-            # Cache the result with size limit
-            if len(self._cache) >= self._max_cache_size:
-                # Remove oldest entry (simple FIFO)
-                oldest_key = next(iter(self._cache))
-                del self._cache[oldest_key]
-
-            self._cache[cache_key] = html_content
-            return html_content
-
-        except Exception as e:
-            logger.error(f"Error processing markdown file {file_path}: {e}")
-            raise
+# Track asyncio tasks to prevent unawaited coroutine warnings
+pending_tasks: set[asyncio.Task[None]] = set()
 
 
 # Global markdown processor instance
 markdown_processor = MarkdownProcessor()
+
+# Documentation service instance
+docs_service = DocumentationService(DOCS_DIR, markdown_processor)
+
+
+async def run_initial_documentation_generation(dir_status: DirectoryStatus, config: dict[str, Any]) -> bool:
+    """
+    Run initial documentation generation during startup.
+
+    Args:
+        dir_status: Directory status information
+        config: Environment configuration
+
+    Returns:
+        True if generation completed successfully, False otherwise
+    """
+    global startup_errors
+
+    if not dir_status.apps_exists:
+        return False
+
+    logger.info("🚀 Starting initial documentation generation...")
+
+    try:
+        # Create batch generator
+        batch_generator = BatchDocGenerator(APPS_DIR, DOCS_DIR)
+
+        # Broadcast startup event
+        await websocket_manager.broadcast_batch_status(
+            EventType.BATCH_STARTED,
+            "Starting initial documentation generation on server startup",
+            {"phase": "startup", "apps_directory": str(APPS_DIR)},
+        )
+
+        # Progress callback setup
+        async def progress_callback(current: int, total: int, current_file: str, stage: str) -> None:
+            logger.debug(f"Generation progress: {current}/{total} - {current_file} ({stage})")
+            await websocket_manager.broadcast_generation_progress(
+                current=current, total=total, current_file=current_file, stage=stage
+            )
+
+        def sync_progress_callback(current: int, total: int, current_file: str, stage: str) -> None:
+            """Sync wrapper for async progress callback with proper task tracking."""
+            task = asyncio.create_task(progress_callback(current, total, current_file, stage))
+            pending_tasks.add(task)
+            task.add_done_callback(pending_tasks.discard)
+
+        # Run generation
+        results = batch_generator.generate_all_docs(
+            force_regenerate=config["force_regenerate"], progress_callback=sync_progress_callback
+        )
+
+        # Generate index file
+        logger.info("📄 Generating documentation index...")
+        index_content = batch_generator.generate_index_file()
+        index_path = DOCS_DIR / "README.md"
+        index_path.write_text(index_content, encoding="utf-8")
+
+        # Log and broadcast results
+        logger.info(
+            f"✅ Generation complete: {results['successful']} successful, "
+            f"{results['failed']} failed, {results['skipped']} skipped"
+        )
+
+        if results["failed"] > 0:
+            error_msg = f"Initial generation completed with {results['failed']} failures"
+            startup_errors.append(error_msg)
+            await websocket_manager.broadcast_batch_status(EventType.BATCH_ERROR, error_msg, results)
+            return False
+        else:
+            await websocket_manager.broadcast_batch_status(
+                EventType.BATCH_COMPLETED,
+                f"Initial generation completed successfully: {results['successful']} files",
+                results,
+            )
+            return True
+
+    except Exception as e:
+        error_msg = f"Initial documentation generation failed: {str(e)}"
+        logger.error(error_msg)
+        startup_errors.append(error_msg)
+        await websocket_manager.broadcast_batch_status(EventType.BATCH_ERROR, error_msg, {"error": str(e)})
+        return False
+
+
+async def start_file_watcher(dir_status: DirectoryStatus, config: dict[str, Any]) -> FileWatcher | None:
+    """
+    Start the file watcher if conditions are met.
+
+    Args:
+        dir_status: Directory status information
+        config: Environment configuration
+
+    Returns:
+        FileWatcher instance if started successfully, None otherwise
+    """
+    global startup_errors
+
+    if not dir_status.apps_exists:
+        logger.warning("⚠️ File watcher disabled: Apps directory not found")
+        return None
+
+    if not config["enable_file_watcher"]:
+        logger.info("⚠️ File watcher disabled by configuration")
+        return None
+
+    logger.info("👀 Starting file watcher...")
+
+    try:
+        # Create watcher configuration
+        watch_config = WatchConfig(
+            watch_directory=APPS_DIR,
+            output_directory=DOCS_DIR,
+            debounce_delay=config["watch_debounce_delay"],
+            max_retry_attempts=config["watch_max_retries"],
+            force_regenerate=config["watch_force_regenerate"],
+            log_level=config["watch_log_level"],
+        )
+
+        # Initialize and start file watcher
+        watcher = FileWatcher(watch_config)
+        await watcher.start_watching()
+
+        logger.info(f"✅ File watcher started successfully for {APPS_DIR}")
+
+        await websocket_manager.broadcast_batch_status(
+            EventType.WATCHER_STATUS,
+            "File watcher started successfully",
+            {"watch_directory": str(APPS_DIR), "status": "active"},
+        )
+
+        return watcher
+
+    except Exception as e:
+        error_msg = f"Failed to start file watcher: {str(e)}"
+        logger.error(error_msg)
+        startup_errors.append(error_msg)
+
+        await websocket_manager.broadcast_batch_status(
+            EventType.WATCHER_STATUS, error_msg, {"error": str(e), "status": "failed"}
+        )
+        return None
+
+
+async def broadcast_startup_completion(
+    dir_status: DirectoryStatus, watcher: FileWatcher | None, generation_completed: bool
+) -> None:
+    """
+    Broadcast final startup status and log completion.
+
+    Args:
+        dir_status: Directory status information
+        watcher: File watcher instance (if any)
+        generation_completed: Whether generation completed successfully
+    """
+    global startup_errors
+
+    # Broadcast server ready status
+    await websocket_manager.broadcast_batch_status(
+        EventType.SERVER_STATUS,
+        f"Documentation server ready with {len(startup_errors)} startup errors",
+        {
+            "generation_completed": generation_completed,
+            "file_watcher_active": watcher is not None and watcher.is_watching,
+            "startup_errors": startup_errors,
+            "docs_count": dir_status.docs_count,
+        },
+    )
+
+    # Log completion status
+    if startup_errors:
+        logger.warning(f"⚠️ Server started with {len(startup_errors)} errors:")
+        for error in startup_errors:
+            logger.warning(f"  - {error}")
+    else:
+        logger.info("🎉 Documentation server startup completed successfully")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
     Manage application lifespan events for startup and shutdown.
-
-    Enhanced with automatic documentation generation and file watching.
 
     Args:
         app: FastAPI application instance
@@ -151,155 +269,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     startup_errors.clear()
 
     try:
-        # Step 1: Initialize directories
+        # Initialize directories and check status
         logger.info("📁 Initializing directories...")
         DOCS_DIR.mkdir(parents=True, exist_ok=True)
 
-        if not APPS_DIR.exists():
+        # Get directory status and configuration
+        dir_status = DirectoryStatus(APPS_DIR, DOCS_DIR)
+        config = get_environment_config()
+
+        # Log directory status
+        if not dir_status.apps_exists:
             error_msg = f"Apps directory not found: {APPS_DIR}"
             logger.error(error_msg)
             startup_errors.append(error_msg)
         else:
-            apps_count = len([
-                f
-                for f in APPS_DIR.glob("*.py")
-                if f.name
-                not in {"const.py", "infra.py", "utils.py", "__init__.py", "apps.py", "configuration.py", "secrets.py"}
-            ])
-            logger.info(f"Found {apps_count} automation files to process")
+            logger.info(f"Found {dir_status.apps_count} automation files to process")
 
-        # Step 2: Run initial documentation generation
-        if APPS_DIR.exists():
-            logger.info("🚀 Starting initial documentation generation...")
+        # Run initial documentation generation
+        startup_generation_completed = await run_initial_documentation_generation(dir_status, config)
 
-            try:
-                # Create batch generator
-                batch_generator = BatchDocGenerator(APPS_DIR, DOCS_DIR)
+        # Start file watcher
+        file_watcher = await start_file_watcher(dir_status, config)
 
-                # Broadcast startup event
-                await websocket_manager.broadcast_batch_status(
-                    EventType.BATCH_STARTED,
-                    "Starting initial documentation generation on server startup",
-                    {"phase": "startup", "apps_directory": str(APPS_DIR)},
-                )
-
-                # Generate documentation for all files
-                force_regenerate = os.getenv("FORCE_REGENERATE", "false").lower() in ("true", "1", "yes")
-
-                async def progress_callback(current: int, total: int, current_file: str, stage: str) -> None:
-                    logger.debug(f"Generation progress: {current}/{total} - {current_file} ({stage})")
-                    await websocket_manager.broadcast_generation_progress(
-                        current=current, total=total, current_file=current_file, stage=stage
-                    )
-
-                # Convert async callback to sync for batch generator
-                def sync_progress_callback(current: int, total: int, current_file: str, stage: str) -> None:
-                    asyncio.create_task(progress_callback(current, total, current_file, stage))
-
-                # Run generation
-                results = batch_generator.generate_all_docs(
-                    force_regenerate=force_regenerate, progress_callback=sync_progress_callback
-                )
-
-                # Generate index file
-                logger.info("📄 Generating documentation index...")
-                index_content = batch_generator.generate_index_file()
-                index_path = DOCS_DIR / "README.md"
-                index_path.write_text(index_content, encoding="utf-8")
-
-                # Log results
-                logger.info(
-                    f"✅ Generation complete: {results['successful']} successful, "
-                    f"{results['failed']} failed, {results['skipped']} skipped"
-                )
-
-                if results["failed"] > 0:
-                    error_msg = f"Initial generation completed with {results['failed']} failures"
-                    startup_errors.append(error_msg)
-
-                    await websocket_manager.broadcast_batch_status(EventType.BATCH_ERROR, error_msg, results)
-                else:
-                    await websocket_manager.broadcast_batch_status(
-                        EventType.BATCH_COMPLETED,
-                        f"Initial generation completed successfully: {results['successful']} files",
-                        results,
-                    )
-
-                startup_generation_completed = True
-
-            except Exception as e:
-                error_msg = f"Initial documentation generation failed: {str(e)}"
-                logger.error(error_msg)
-                startup_errors.append(error_msg)
-
-                await websocket_manager.broadcast_batch_status(EventType.BATCH_ERROR, error_msg, {"error": str(e)})
-
-        # Step 3: Start file watcher
-        if APPS_DIR.exists() and os.getenv("ENABLE_FILE_WATCHER", "true").lower() in ("true", "1", "yes"):
-            logger.info("👀 Starting file watcher...")
-
-            try:
-                # Create watcher configuration
-                watch_config = WatchConfig(
-                    watch_directory=APPS_DIR,
-                    output_directory=DOCS_DIR,
-                    debounce_delay=float(os.getenv("WATCH_DEBOUNCE_DELAY", "2.0")),
-                    max_retry_attempts=int(os.getenv("WATCH_MAX_RETRIES", "3")),
-                    force_regenerate=os.getenv("WATCH_FORCE_REGENERATE", "false").lower() in ("true", "1", "yes"),
-                    log_level=os.getenv("WATCH_LOG_LEVEL", "INFO"),
-                )
-
-                # Initialize and start file watcher
-                file_watcher = FileWatcher(watch_config)
-                await file_watcher.start_watching()
-
-                logger.info(f"✅ File watcher started successfully for {APPS_DIR}")
-
-                await websocket_manager.broadcast_batch_status(
-                    EventType.WATCHER_STATUS,
-                    "File watcher started successfully",
-                    {"watch_directory": str(APPS_DIR), "status": "active"},
-                )
-
-            except Exception as e:
-                error_msg = f"Failed to start file watcher: {str(e)}"
-                logger.error(error_msg)
-                startup_errors.append(error_msg)
-
-                await websocket_manager.broadcast_batch_status(
-                    EventType.WATCHER_STATUS, error_msg, {"error": str(e), "status": "failed"}
-                )
-        else:
-            if not APPS_DIR.exists():
-                logger.warning("⚠️ File watcher disabled: Apps directory not found")
-            else:
-                logger.info("⚠️ File watcher disabled by configuration")
-
-        # Step 4: Final startup status
-        if not DOCS_DIR.exists():
-            logger.warning(f"Documentation directory still not found: {DOCS_DIR}")
-        else:
-            file_count = len(list(DOCS_DIR.glob("*.md")))
-            logger.info(f"📚 Documentation ready: {file_count} files available")
-
-        # Broadcast server ready status
-        await websocket_manager.broadcast_batch_status(
-            EventType.SERVER_STATUS,
-            f"Documentation server ready with {len(startup_errors)} startup errors",
-            {
-                "generation_completed": startup_generation_completed,
-                "file_watcher_active": file_watcher is not None and file_watcher.is_watching,
-                "startup_errors": startup_errors,
-                "docs_count": len(list(DOCS_DIR.glob("*.md"))) if DOCS_DIR.exists() else 0,
-            },
-        )
-
-        if startup_errors:
-            logger.warning(f"⚠️ Server started with {len(startup_errors)} errors:")
-            for error in startup_errors:
-                logger.warning(f"  - {error}")
-        else:
-            logger.info("🎉 Documentation server startup completed successfully")
+        # Final startup status
+        dir_status.log_status(logger)
+        await broadcast_startup_completion(dir_status, file_watcher, startup_generation_completed)
 
     except Exception as e:
         logger.error(f"Critical startup error: {e}")
@@ -317,6 +311,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.info("Stopping file watcher...")
             await file_watcher.stop_watching()
             logger.info("File watcher stopped")
+
+        # Wait for pending tasks to complete or cancel them
+        if pending_tasks:
+            logger.info(f"Waiting for {len(pending_tasks)} pending tasks to complete...")
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
+            pending_tasks.clear()
 
         # Clear markdown processor cache
         markdown_processor._cache.clear()
@@ -342,107 +342,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Configure static files and templates
-if STATIC_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
-
-
-class DocumentationService:
-    """Service for managing documentation files and metadata."""
-
-    @staticmethod
-    async def get_file_list() -> list[dict[str, str | int]]:
-        """
-        Get list of available documentation files with metadata.
-
-        Returns:
-            List of file metadata dictionaries
-        """
-        if not DOCS_DIR.exists():
-            return []
-
-        files: list[dict[str, str | int]] = []
-        for file_path in DOCS_DIR.glob("*.md"):
-            try:
-                stat = file_path.stat()
-                files.append({
-                    "name": file_path.name,
-                    "stem": file_path.stem,
-                    "size": stat.st_size,
-                    "modified": int(stat.st_mtime),
-                    "title": await DocumentationService._extract_title(file_path),
-                })
-            except Exception as e:
-                logger.warning(f"Error reading file {file_path}: {e}")
-                continue
-
-        # Sort by name for consistent ordering
-        return sorted(files, key=lambda x: str(x["name"]))
-
-    @staticmethod
-    async def _extract_title(file_path: Path) -> str:
-        """
-        Extract title from markdown file (first H1 header or filename).
-
-        Args:
-            file_path: Path to markdown file
-
-        Returns:
-            Extracted or fallback title
-        """
-        try:
-            with open(file_path, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith("# "):
-                        return line[2:].strip()
-                    # Stop after first 10 lines to avoid reading entire file
-                    if f.tell() > 1000:
-                        break
-        except Exception:
-            pass
-
-        # Fallback to filename without extension
-        return file_path.stem.replace("_", " ").replace("-", " ").title()
-
-    @staticmethod
-    async def get_file_content(filename: str) -> tuple[str, str]:
-        """
-        Get processed markdown content for a specific file.
-
-        Args:
-            filename: Name of the markdown file
-
-        Returns:
-            Tuple of (html_content, title)
-
-        Raises:
-            HTTPException: If file not found or processing error
-        """
-        if not filename.endswith(".md"):
-            filename += ".md"
-
-        file_path = DOCS_DIR / filename
-
-        if not file_path.exists() or not file_path.is_file():
-            raise HTTPException(status_code=404, detail=f"Documentation file '{filename}' not found")
-
-        try:
-            # Get file hash for cache invalidation
-            stat = file_path.stat()
-            content_hash = hash(f"{file_path}-{stat.st_mtime}-{stat.st_size}")
-
-            # Process markdown with caching
-            html_content = markdown_processor.process_file(str(file_path), content_hash)
-            title = await DocumentationService._extract_title(file_path)
-
-            return html_content, title
-
-        except Exception as e:
-            logger.error(f"Error processing file {filename}: {e}")
-            raise HTTPException(status_code=500, detail=f"Error processing documentation file: {str(e)}") from e
 
 
 # API Routes with proper error handling and response models
@@ -454,7 +354,7 @@ async def root() -> RedirectResponse:
     return RedirectResponse(url="/docs/", status_code=307)
 
 
-@app.get("/health")  # type: ignore[misc]
+@app.get("/health", operation_id="health")  # type: ignore[misc]
 async def health_check() -> dict[str, str | bool | int | list[str]]:
     """
     Health check endpoint for monitoring server status.
@@ -496,7 +396,7 @@ async def health_check() -> dict[str, str | bool | int | list[str]]:
     }
 
 
-@app.get("/api/files")  # type: ignore[misc]
+@app.get("/api/files", operation_id="list_files")  # type: ignore[misc]
 async def list_documentation_files() -> dict[str, list[dict[str, Any]] | int | bool | str]:
     """
     List all available documentation files with metadata.
@@ -505,7 +405,7 @@ async def list_documentation_files() -> dict[str, list[dict[str, Any]] | int | b
         Dictionary containing file list and metadata
     """
     try:
-        files = await DocumentationService.get_file_list()
+        files = await docs_service.get_file_list()
         return {
             "files": files,
             "total_count": len(files),
@@ -517,7 +417,7 @@ async def list_documentation_files() -> dict[str, list[dict[str, Any]] | int | b
         raise HTTPException(status_code=500, detail="Error listing documentation files") from e
 
 
-@app.get("/api/file/{filename}")  # type: ignore[misc]
+@app.get("/api/file/{filename}", operation_id="get_file")  # type: ignore[misc]
 async def get_file_content(filename: str) -> dict[str, str]:
     """
     Get processed content for a specific documentation file.
@@ -529,7 +429,7 @@ async def get_file_content(filename: str) -> dict[str, str]:
         Dictionary containing processed HTML content and metadata
     """
     try:
-        html_content, title = await DocumentationService.get_file_content(filename)
+        html_content, title = await docs_service.get_file_content(filename)
         return {"filename": filename, "title": title, "content": html_content, "type": "markdown"}
     except HTTPException:
         raise
@@ -550,7 +450,7 @@ async def documentation_index(request: Request) -> HTMLResponse:
         HTML response with documentation index
     """
     try:
-        files = await DocumentationService.get_file_list()
+        files = await docs_service.get_file_list()
         return templates.TemplateResponse(
             "index.html",
             {
@@ -578,7 +478,7 @@ async def documentation_file(request: Request, filename: str) -> HTMLResponse:
         HTML response with rendered documentation
     """
     try:
-        html_content, title = await DocumentationService.get_file_content(filename)
+        html_content, title = await docs_service.get_file_content(filename)
 
         return templates.TemplateResponse(
             "document.html",
@@ -596,7 +496,7 @@ async def documentation_file(request: Request, filename: str) -> HTMLResponse:
         raise HTTPException(status_code=500, detail="Error rendering documentation") from e
 
 
-@app.get("/api/search")  # type: ignore[misc]
+@app.get("/api/search", operation_id="search_docs")  # type: ignore[misc]
 async def search_documentation(q: str = "") -> dict[str, list[dict[str, Any]] | str | int]:
     """
     Search through documentation content for matching files.
@@ -644,7 +544,7 @@ async def search_documentation(q: str = "") -> dict[str, list[dict[str, Any]] | 
                             # Highlight the search term
                             context = context.replace(query, f"**{query}**")
 
-                    title = await DocumentationService._extract_title(file_path)
+                    title = await docs_service.extract_title(file_path)
 
                     # Calculate relevance score
                     relevance = (10 if title_match else 0) + content_matches
@@ -729,7 +629,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         await websocket_manager.disconnect(websocket)
 
 
-@app.get("/api/ws/status")  # type: ignore[misc]
+@app.get("/api/ws/status", operation_id="ws_status")  # type: ignore[misc]
 async def websocket_status() -> dict[str, Any]:
     """
     Get WebSocket connection status and statistics.
@@ -749,7 +649,7 @@ async def websocket_status() -> dict[str, Any]:
         raise HTTPException(status_code=500, detail="Error getting WebSocket status") from e
 
 
-@app.get("/api/watcher/status")  # type: ignore[misc]
+@app.get("/api/watcher/status", operation_id="watcher_status")  # type: ignore[misc]
 async def watcher_status() -> dict[str, Any]:
     """
     Get file watcher status and statistics.
@@ -778,7 +678,7 @@ async def watcher_status() -> dict[str, Any]:
         raise HTTPException(status_code=500, detail="Error getting watcher status") from e
 
 
-@app.post("/api/generate/all")  # type: ignore[misc]
+@app.post("/api/generate/all", operation_id="generate_all")  # type: ignore[misc]
 async def trigger_full_generation(force: bool = False) -> dict[str, Any]:
     """
     Manually trigger full documentation generation.
@@ -846,7 +746,7 @@ async def trigger_full_generation(force: bool = False) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}") from e
 
 
-@app.post("/api/generate/file/{filename}")  # type: ignore[misc]
+@app.post("/api/generate/file/{filename}", operation_id="generate_file")  # type: ignore[misc]
 async def trigger_single_file_generation(filename: str, force: bool = False) -> dict[str, Any]:
     """
     Manually trigger documentation generation for a single file.
@@ -925,7 +825,7 @@ async def trigger_single_file_generation(filename: str, force: bool = False) -> 
         raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}") from e
 
 
-@app.post("/api/ws/broadcast")  # type: ignore[misc]
+@app.post("/api/ws/broadcast", operation_id="broadcast_test")  # type: ignore[misc]
 async def broadcast_test_message(message: str = "Test message") -> dict[str, Any]:
     """
     Send a test broadcast message to all connected WebSocket clients.
@@ -952,7 +852,15 @@ async def broadcast_test_message(message: str = "Test message") -> dict[str, Any
         raise HTTPException(status_code=500, detail="Error broadcasting message") from e
 
 
-# Application lifespan is now managed by the lifespan context manager above
+# Initialize MCP integration with proper error handling
+try:
+    mcp = FastApiMCP(app)
+    mcp.mount_http()
+    logger.info("✅ MCP integration initialized successfully")
+except Exception as e:
+    logger.warning(f"⚠️ MCP integration failed to initialize: {e}")
+    logger.warning("Server will continue without MCP functionality")
+    # Continue without MCP - this is not a critical failure
 
 
 def main() -> None:
@@ -975,65 +883,23 @@ def main() -> None:
         WATCH_FORCE_REGENERATE: Force regenerate on file changes (default: false)
         WATCH_LOG_LEVEL: File watcher log level (default: INFO)
     """
-    # Configure uvicorn with environment variable support
-    host = os.getenv("HOST", "0.0.0.0")
-    port = int(os.getenv("PORT", "8080"))
-    reload = os.getenv("RELOAD", "true").lower() in ("true", "1", "yes", "on")
-    log_level_uvicorn = os.getenv("LOG_LEVEL", "info").lower()
+    # Get configuration from centralized utilities
+    server_config = get_server_config()
+    env_config = get_environment_config()
+    dir_status = DirectoryStatus(APPS_DIR, DOCS_DIR)
 
-    print(f"Starting {APP_TITLE} v{APP_VERSION}...")
-    print(f"Apps directory: {APPS_DIR}")
-    print(f"Documentation directory: {DOCS_DIR}")
-    print(f"Server will be available at: http://{host}:{port}")
-    print()
-    print("Configuration:")
-    print(f"  HOST={host}")
-    print(f"  PORT={port}")
-    print(f"  RELOAD={reload}")
-    print(f"  LOG_LEVEL={log_level_uvicorn}")
-    print(f"  FORCE_REGENERATE={os.getenv('FORCE_REGENERATE', 'false')}")
-    print(f"  ENABLE_FILE_WATCHER={os.getenv('ENABLE_FILE_WATCHER', 'true')}")
-    print(f"  WATCH_DEBOUNCE_DELAY={os.getenv('WATCH_DEBOUNCE_DELAY', '2.0')}")
-    print()
+    # Print comprehensive startup information
+    print_startup_info(dir_status, server_config, env_config)
 
-    # Check directories
-    if not APPS_DIR.exists():
-        print(f"⚠️  Warning: Apps directory not found at {APPS_DIR}")
-        print("         Auto-generation will be skipped")
-    else:
-        apps_count = len([
-            f
-            for f in APPS_DIR.glob("*.py")
-            if f.name
-            not in {"const.py", "infra.py", "utils.py", "__init__.py", "apps.py", "configuration.py", "secrets.py"}
-        ])
-        print(f"📁 Found {apps_count} automation files to process")
-
-    if not DOCS_DIR.exists():
-        print(f"⚠️  Documentation directory will be created at {DOCS_DIR}")
-    else:
-        file_count = len(list(DOCS_DIR.glob("*.md")))
-        print(f"📚 Found {file_count} existing documentation files")
-
-    print()
-    print("Features enabled:")
-    print(f"  🚀 Auto-generation on startup: {'Yes' if APPS_DIR.exists() else 'No (apps dir missing)'}")
-    print(
-        f"  👀 File watcher: {'Yes' if os.getenv('ENABLE_FILE_WATCHER', 'true').lower() in ('true', '1', 'yes') else 'No'}"
-    )
-    print("  🔄 WebSocket real-time updates: Yes")
-    print("  🔍 Full-text search: Yes")
-    print()
-
+    # Create uvicorn configuration
     config = uvicorn.Config(
         "main:app",
-        host=host,
-        port=port,
-        reload=reload,
-        log_level=log_level_uvicorn,
+        host=server_config["host"],
+        port=server_config["port"],
+        reload=server_config["reload"],
+        log_level=server_config["log_level"],
         access_log=True,
         use_colors=True,
-        reload_dirs=[".", str(DOCS_DIR)] if reload else None,  # Watch dirs only if reload enabled
     )
 
     server = uvicorn.Server(config)
@@ -1041,9 +907,9 @@ def main() -> None:
     try:
         asyncio.run(server.serve())
     except KeyboardInterrupt:
-        print("\n👋 Server stopped by user")
+        logger.info("\n👋 Server stopped by user")
     except Exception as e:
-        print(f"❌ Server error: {e}")
+        logger.error(f"❌ Server error: {e}")
         raise
 
 

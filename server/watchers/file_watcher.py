@@ -8,6 +8,7 @@ and comprehensive logging.
 
 import asyncio
 import logging
+import os
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -18,17 +19,17 @@ from weakref import WeakSet
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
-from generators.batch_doc_generator import BatchDocGenerator
-from websocket.websocket_manager import websocket_manager, EventType
+from server.generators.batch_doc_generator import BatchDocGenerator
+from server.websocket.websocket_manager import websocket_manager, EventType
 
 
 @dataclass
 class WatchConfig:
     """Configuration for file watching behavior."""
 
-    # Directory paths
-    watch_directory: Path = field(default_factory=lambda: Path("/app/appdaemon-apps"))
-    output_directory: Path = field(default_factory=lambda: Path("/app/docs"))
+    # Directory paths with robust defaults
+    watch_directory: Path = field(default_factory=lambda: Path(os.getenv("APPS_DIR") or "/app/appdaemon-apps"))
+    output_directory: Path = field(default_factory=lambda: Path(os.getenv("DOCS_DIR") or "/app/docs"))
 
     # File filtering
     file_patterns: set[str] = field(default_factory=lambda: {"*.py"})
@@ -66,6 +67,19 @@ class FileEvent:
     event_type: str
     timestamp: float
     retry_count: int = 0
+
+    def __init__(self, file_path: Path | str, event_type: str, timestamp: float, retry_count: int = 0) -> None:
+        """Initialize FileEvent with automatic path conversion."""
+        self.file_path = Path(file_path) if isinstance(file_path, str) else file_path
+        self.event_type = event_type
+        self.timestamp = timestamp
+        self.retry_count = retry_count
+
+        if self.timestamp <= 0:
+            raise ValueError("Timestamp must be positive")
+
+        if self.retry_count < 0:
+            raise ValueError("Retry count cannot be negative")
 
 
 @dataclass
@@ -212,8 +226,14 @@ class FileWatcher:
 
         Args:
             config: Watch configuration, defaults to WatchConfig()
+
+        Raises:
+            ValueError: If configuration parameters are invalid
         """
         self.config = config or WatchConfig()
+
+        # Validate configuration parameters
+        self._validate_config()
 
         # Set up logging
         self.logger = logging.getLogger(__name__)
@@ -255,6 +275,23 @@ class FileWatcher:
 
         # Callbacks for external integration
         self._generation_callbacks: WeakSet[Callable[[GenerationResult], None]] = WeakSet()
+
+    def _validate_config(self) -> None:
+        """Validate configuration parameters."""
+        if self.config.debounce_delay < 0:
+            raise ValueError("Debounce delay must be non-negative")
+
+        if self.config.max_retry_attempts < 0:
+            raise ValueError("Max retry attempts must be non-negative")
+
+        if self.config.retry_delay < 0:
+            raise ValueError("Retry delay must be non-negative")
+
+        if not self.config.file_patterns:
+            raise ValueError("At least one file pattern must be specified")
+
+        if self.config.max_recent_events <= 0:
+            raise ValueError("Max recent events must be positive")
 
     def add_generation_callback(self, callback: Callable[[GenerationResult], None]) -> None:
         """Add a callback to be called when generation completes."""
@@ -670,57 +707,3 @@ class FileWatcher:
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """Async context manager exit."""
         await self.stop_watching()
-
-
-# Example usage and testing
-async def main() -> None:
-    """Example usage of the FileWatcher."""
-    import sys
-
-    # Configure logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout), logging.FileHandler("file_watcher.log")],
-    )
-
-    # Create configuration
-    config = WatchConfig(
-        watch_directory=Path("../apps"),
-        output_directory=Path("../apps/docs"),
-        debounce_delay=2.0,
-        max_retry_attempts=3,
-        log_level="DEBUG",
-    )
-
-    # Create and start watcher
-    async with FileWatcher(config) as watcher:
-        # Add a callback to log generation results
-        def log_result(result: GenerationResult) -> None:
-            if result.success:
-                print(f"✅ Generated: {result.file_path.name} -> {result.output_path}")
-            else:
-                print(f"❌ Failed: {result.file_path.name} - {result.error_message}")
-
-        watcher.add_generation_callback(log_result)
-
-        # Generate all docs on startup
-        await watcher.generate_all_docs(force=True)
-
-        # Keep watching
-        print("File watcher is running. Press Ctrl+C to stop.")
-        try:
-            while True:
-                await asyncio.sleep(1)
-
-                # Print status every 30 seconds
-                if int(time.time()) % 30 == 0:
-                    status = watcher.get_status()
-                    print(f"Status: {status['statistics']}")
-
-        except KeyboardInterrupt:
-            print("Stopping file watcher...")
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
