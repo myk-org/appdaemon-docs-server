@@ -73,6 +73,17 @@ docker run -d \
   appdaemon-docs-server
 ```
 
+**Windows Users:** Use forward slashes and proper drive mapping:
+```bash
+# Windows example
+docker run -d \
+  --name appdaemon-docs \
+  -p 8080:8080 \
+  -e APPS_DIR=/app/appdaemon-apps \
+  -v //c/Users/username/appdaemon/apps:/app/appdaemon-apps:ro \
+  appdaemon-docs-server
+```
+
 #### 3. Run with Docker Compose (Recommended)
 
 Use the provided `docker-compose.yml` file and customize the volume path:
@@ -363,6 +374,10 @@ environment:
 - **Non-Root User** - Container runs as non-root user (UID 1000)
 - **Network Access** - Consider firewall rules for port 8080
 - **MCP Access** - MCP integration provides full API access including documentation regeneration capabilities
+- **External Directory Access** - When using external paths, the server will detect and warn about:
+  - Unrestricted filesystem access outside the repository
+  - Read-only vs read-write mount status
+  - Security implications of external path usage
 
 ## Troubleshooting
 

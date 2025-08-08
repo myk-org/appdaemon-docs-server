@@ -867,7 +867,7 @@
 
             // Show/hide cards based on filter
             fileCards.forEach(card => {
-                const module = card.getAttribute('data-module');
+                const module = card.dataset.module;
                 if (filterType === 'all' || visibleModules.includes(module)) {
                     card.style.display = '';
                 } else {
@@ -883,15 +883,17 @@
             }
 
             // Update stats if needed
-            updateFilterStats(filterType, visibleModules.length);
+            updateFilterStats(filterType);
         }
 
-        function updateFilterStats(filterType, count) {
+        function updateFilterStats(filterType) {
             const statsElement = document.querySelector('.stats strong');
             if (filterType === 'all') {
                 statsElement.textContent = appCounts.total;
             } else {
-                statsElement.textContent = count;
+                // Count actual visible DOM cards instead of module count
+                const visibleCards = document.querySelectorAll('.file-card:not([style*="display: none"]), .file-list-item:not([style*="display: none"])');
+                statsElement.textContent = visibleCards.length;
             }
         }
 
@@ -1390,6 +1392,15 @@
                 } else {
                     fileGrid.style.display = 'grid';
                     fileList.style.display = 'none';
+                }
+
+                // Update stats to reflect current filter state
+                const activeFilter = document.querySelector('.filter-button.active');
+                if (activeFilter) {
+                    const filterType = activeFilter.getAttribute('data-filter');
+                    updateFilterStats(filterType);
+                } else {
+                    updateFilterStats('all');
                 }
             };
 

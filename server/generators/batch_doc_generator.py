@@ -11,6 +11,11 @@ from typing import Any, Callable
 from server.generators.doc_generator import AppDaemonDocGenerator
 from server.parsers.appdaemon_parser import parse_appdaemon_file
 
+# NOTE: Shell-like paths (e.g., ~/appdaemon/apps) require expansion via os.path.expanduser()
+# or pathlib.Path.expanduser(). The server and dev runner should expand ~ and environment
+# variables before passing paths to this generator. Additionally, pointing APPS_DIR to
+# large directories or NFS-mounted filesystems may impact performance with file watching.
+
 
 class BatchDocGenerator:
     """Batch processor for generating AppDaemon documentation."""
@@ -27,12 +32,24 @@ class BatchDocGenerator:
         self.docs_dir = Path(docs_dir)
         self.doc_generator = AppDaemonDocGenerator(str(self.docs_dir))
 
-        # Look for apps.yaml in the apps directory
-        apps_yaml_candidate = self.apps_dir / "apps.yaml"
-        self.apps_yaml_path = apps_yaml_candidate if apps_yaml_candidate.exists() else None
-
         # Ensure docs directory exists
         self.docs_dir.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def apps_yaml_path(self) -> Path | None:
+        """
+        Get the apps.yaml path if it exists.
+
+        This property provides consistent access to the apps.yaml configuration file
+        and caches the result to avoid repeated file existence checks.
+
+        Returns:
+            Path to apps.yaml if it exists, None otherwise
+        """
+        if not hasattr(self, "_apps_yaml_path"):
+            apps_yaml_candidate = self.apps_dir / "apps.yaml"
+            self._apps_yaml_path = apps_yaml_candidate if apps_yaml_candidate.exists() else None
+        return self._apps_yaml_path
 
     def find_automation_files(self) -> list[Path]:
         """
@@ -181,7 +198,7 @@ class BatchDocGenerator:
 
         for file_path in automation_files:
             try:
-                parsed_file = parse_appdaemon_file(file_path)
+                parsed_file = parse_appdaemon_file(file_path, apps_yaml_path=self.apps_yaml_path)
                 total_classes += len(parsed_file.classes)
                 for class_info in parsed_file.classes:
                     total_listeners += len(class_info.state_listeners)
@@ -242,7 +259,7 @@ class BatchDocGenerator:
 
                 # Try to get a brief description
                 try:
-                    parsed_file = parse_appdaemon_file(file_path)
+                    parsed_file = parse_appdaemon_file(file_path, apps_yaml_path=self.apps_yaml_path)
                     if parsed_file.classes and parsed_file.classes[0].docstring:
                         description = parsed_file.classes[0].docstring.split("\n")[0]
                     else:

@@ -738,33 +738,38 @@ class AppDaemonDocGenerator:
         """Generate person-centric automation patterns section."""
         patterns = parsed_file.person_centric_patterns
 
-        if not patterns.person_entities:
+        person_entities = getattr(patterns, "person_entities", [])
+        if not person_entities:
             return ""
 
         section = "## Person-Centric Automation\n\n"
         section += "This automation implements person-specific behavior patterns:\n\n"
 
-        if patterns.notification_channels:
+        notification_channels = getattr(patterns, "notification_channels", [])
+        if notification_channels:
             section += "### Notification Channels\n"
-            for channel in patterns.notification_channels:
+            for channel in notification_channels:
                 section += f"- **{channel}**: Personal notification delivery\n"
             section += "\n"
 
-        if patterns.presence_detection:
+        presence_detection = getattr(patterns, "presence_detection", [])
+        if presence_detection:
             section += "### Presence Detection\n"
-            for presence in patterns.presence_detection:
+            for presence in presence_detection:
                 section += f"- **{presence}**: Location and presence tracking\n"
             section += "\n"
 
-        if patterns.device_tracking:
+        device_tracking = getattr(patterns, "device_tracking", [])
+        if device_tracking:
             section += "### Device Tracking\n"
-            for device in patterns.device_tracking:
+            for device in device_tracking:
                 section += f"- **{device}**: Personal device monitoring\n"
             section += "\n"
 
-        if patterns.personalized_settings:
+        personalized_settings = getattr(patterns, "personalized_settings", [])
+        if personalized_settings:
             section += "### Personalized Settings\n"
-            for setting in patterns.personalized_settings:
+            for setting in personalized_settings:
                 section += f"- **{setting}**: Individual preference configuration\n"
             section += "\n"
 
@@ -774,21 +779,23 @@ class AppDaemonDocGenerator:
         """Generate helper injection patterns section."""
         patterns = parsed_file.helper_injection_patterns
 
-        if not patterns.has_helpers_injection:
+        if not getattr(patterns, "has_helpers_injection", False):
             return ""
 
         section = "## Helper Injection Patterns\n\n"
         section += "This automation uses dependency injection for helper functions:\n\n"
 
-        if patterns.helper_methods_used:
+        helper_methods = getattr(patterns, "helper_methods_used", [])
+        if helper_methods:
             section += "### Helper Methods\n"
-            for helper in patterns.helper_methods_used:
+            for helper in helper_methods:
                 section += f"- **{helper}()**: Injected utility function\n"
             section += "\n"
 
-        if patterns.dependency_injection:
+        dependency_injections = getattr(patterns, "dependency_injection", [])
+        if dependency_injections:
             section += "### Dependency Injection\n"
-            for injection in patterns.dependency_injection:
+            for injection in dependency_injections:
                 section += f"- **{injection}**: Framework-level dependency management\n"
             section += "\n"
 
@@ -804,36 +811,42 @@ class AppDaemonDocGenerator:
         """Generate error handling patterns section."""
         patterns = parsed_file.error_handling_patterns
 
-        if not (patterns.has_try_catch or patterns.error_notification or patterns.recovery_mechanisms):
+        has_try_catch = getattr(patterns, "has_try_catch", False)
+        error_notification = getattr(patterns, "error_notification", False)
+        recovery_mechanisms = getattr(patterns, "recovery_mechanisms", [])
+
+        if not (has_try_catch or error_notification or recovery_mechanisms):
             return ""
 
         section = "## Error Handling & Recovery\n\n"
         section += "This automation implements comprehensive error handling:\n\n"
 
-        if patterns.has_try_catch:
+        if has_try_catch:
             section += "### Exception Handling\n"
             section += "- **Try-Catch Blocks**: Structured exception handling prevents automation failures\n"
             section += "- **Graceful Degradation**: Automation continues operating despite individual failures\n\n"
 
-        if patterns.error_notification:
+        if error_notification:
             section += "### Error Notifications\n"
             section += "- **Alert System**: Automatic notifications when errors occur\n"
             section += "- **Telegram Integration**: Real-time error alerts to administrators\n\n"
 
-        if patterns.logging_on_error:
+        logging_on_error = getattr(patterns, "logging_on_error", False)
+        if logging_on_error:
             section += "### Error Logging\n"
             section += "- **Detailed Logging**: Comprehensive error information for debugging\n"
             section += "- **Performance Tracking**: Error impact on system performance\n\n"
 
-        if patterns.recovery_mechanisms:
+        if recovery_mechanisms:
             section += "### Recovery Mechanisms\n"
-            for recovery in patterns.recovery_mechanisms:
+            for recovery in recovery_mechanisms:
                 section += f"- **{recovery}**: Automatic recovery strategies\n"
             section += "\n"
 
-        if patterns.alert_patterns:
+        alert_patterns = getattr(patterns, "alert_patterns", [])
+        if alert_patterns:
             section += "### Alert Patterns\n"
-            for alert in patterns.alert_patterns:
+            for alert in alert_patterns:
                 section += f"- **{alert}**: Proactive monitoring and alerting\n"
             section += "\n"
 
@@ -843,13 +856,14 @@ class AppDaemonDocGenerator:
         """Generate constant hierarchy section showing configuration organization."""
         hierarchy = parsed_file.constant_hierarchy
 
-        if not hierarchy.hierarchical_constants:
+        hierarchical_constants = getattr(hierarchy, "hierarchical_constants", {})
+        if not hierarchical_constants:
             return ""
 
         section = "## Configuration Hierarchy\n\n"
         section += "This automation uses a hierarchical configuration structure:\n\n"
 
-        for prefix, constants in hierarchy.hierarchical_constants.items():
+        for prefix, constants in hierarchical_constants.items():
             section += f"### {prefix} Configuration\n"
 
             # Group constants by their second level for better organization
@@ -878,18 +892,25 @@ class AppDaemonDocGenerator:
                 section += "\n"
 
         # Add summary of configuration scope
-        total_constants = sum(len(constants) for constants in hierarchy.hierarchical_constants.values())
+        total_constants = sum(len(constants) for constants in hierarchical_constants.values())
         section += "### Configuration Scope\n"
         section += f"- **Total Constants**: {total_constants} configuration references\n"
 
-        if hierarchy.person_constants:
-            section += f"- **Person-Specific**: {len(hierarchy.person_constants)} personal configuration items\n"
-        if hierarchy.device_constants:
-            section += f"- **Device Configuration**: {len(hierarchy.device_constants)} device references\n"
-        if hierarchy.action_constants:
-            section += f"- **Action Templates**: {len(hierarchy.action_constants)} predefined actions\n"
-        if hierarchy.general_constants:
-            section += f"- **General Settings**: {len(hierarchy.general_constants)} system-wide configurations\n"
+        person_constants = getattr(hierarchy, "person_constants", [])
+        if person_constants:
+            section += f"- **Person-Specific**: {len(person_constants)} personal configuration items\n"
+
+        device_constants = getattr(hierarchy, "device_constants", [])
+        if device_constants:
+            section += f"- **Device Configuration**: {len(device_constants)} device references\n"
+
+        action_constants = getattr(hierarchy, "action_constants", [])
+        if action_constants:
+            section += f"- **Action Templates**: {len(action_constants)} predefined actions\n"
+
+        general_constants = getattr(hierarchy, "general_constants", [])
+        if general_constants:
+            section += f"- **General Settings**: {len(general_constants)} system-wide configurations\n"
 
         section += "\n"
 

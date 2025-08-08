@@ -8,6 +8,7 @@ It uses AST parsing to safely analyze code without executing it.
 """
 
 import ast
+import logging
 import re
 import yaml  # type: ignore[import-untyped]
 from dataclasses import dataclass, field
@@ -233,6 +234,7 @@ class AppDaemonParser:
 
     def __init__(self, apps_yaml_path: str | Path | None = None) -> None:
         """Initialize the parser."""
+        self.logger = logging.getLogger(__name__)
         self.current_file = ""
         self.source_lines: list[str] = []
         self.apps_yaml_path = Path(apps_yaml_path) if apps_yaml_path else None
@@ -255,6 +257,19 @@ class AppDaemonParser:
         self.time_patterns = {"run_daily", "run_at", "run_every", "run_in", "cancel_timer"}
 
         self.mqtt_patterns = {"listen_event", "mqtt_send", "mqtt_subscribe"}
+
+        # Pre-compiled regex patterns for performance analysis
+        self.threshold_patterns = [
+            re.compile(r"perf_time_ms\s*>\s*(\d+)"),
+            re.compile(r"execution_time\s*>\s*(\d+)"),
+            re.compile(r"duration\s*>\s*(\d+)"),
+        ]
+
+        self.log_patterns = [
+            re.compile(r"\[Exec:.*perf_time.*\]", re.IGNORECASE),
+            re.compile(r"Execution time:", re.IGNORECASE),
+            re.compile(r"Performance:", re.IGNORECASE),
+        ]
 
     def parse_file(self, file_path: str | Path) -> ParsedFile:
         """
@@ -1031,7 +1046,10 @@ class AppDaemonParser:
             try:
                 with open(self.apps_yaml_path, "r", encoding="utf-8") as f:
                     self.apps_config = yaml.safe_load(f) or {}
-            except Exception:
+            except Exception as e:
+                self.logger.error(
+                    "Failed to load apps.yaml configuration from %s: %s", self.apps_yaml_path, str(e), exc_info=True
+                )
                 self.apps_config = {}
 
     def _extract_app_dependencies(self, file_path: Path) -> list[AppDependency]:
@@ -1044,11 +1062,20 @@ class AppDaemonParser:
         # Find all apps that use this module
         for app_name, app_config in self.apps_config.items():
             if isinstance(app_config, dict) and app_config.get("module") == module_name:
+                # Ensure dependencies is always a list of strings
+                deps_value = app_config.get("dependencies", [])
+                if isinstance(deps_value, str):
+                    dependencies_list = [deps_value]
+                elif isinstance(deps_value, list):
+                    dependencies_list = deps_value
+                else:
+                    dependencies_list = []
+
                 dep = AppDependency(
                     app_name=app_name,
                     module_name=app_config.get("module", module_name),
                     class_name=app_config.get("class", ""),
-                    dependencies=app_config.get("dependencies", []),
+                    dependencies=dependencies_list,
                 )
                 dependencies.append(dep)
 
@@ -1060,26 +1087,44 @@ class AppDaemonParser:
         """Analyze person-centric automation patterns."""
         pattern = PersonCentricPattern()
 
+        # Use sets to collect unique values, then convert to lists
+        person_entities_set: set[str] = set()
+        notification_channels_set: set[str] = set()
+        presence_detection_set: set[str] = set()
+        device_tracking_set: set[str] = set()
+        personalized_settings_set: set[str] = set()
+
         # Look for person-related constants
         for const in constants_used:
             if const.startswith("Persons."):
-                pattern.person_entities.append(const)
+                person_entities_set.add(const)
 
                 # Categorize by type
                 if "telegram" in const.lower():
-                    pattern.notification_channels.append(const)
+                    notification_channels_set.add(const)
                 elif "tracker" in const.lower() or "presence" in const.lower() or "home_sensor" in const.lower():
-                    pattern.presence_detection.append(const)
+                    presence_detection_set.add(const)
                 elif "device_tracker" in const.lower() or "phone" in const.lower() or "watch" in const.lower():
-                    pattern.device_tracking.append(const)
+                    device_tracking_set.add(const)
                 elif "good_night" in const.lower() or "battery_monitor" in const.lower():
-                    pattern.personalized_settings.append(const)
+                    personalized_settings_set.add(const)
+
+        # Convert sets to sorted lists for deterministic output
+        pattern.person_entities = sorted(list(person_entities_set))
+        pattern.notification_channels = sorted(list(notification_channels_set))
+        pattern.presence_detection = sorted(list(presence_detection_set))
+        pattern.device_tracking = sorted(list(device_tracking_set))
+        pattern.personalized_settings = sorted(list(personalized_settings_set))
 
         return pattern
 
     def _analyze_helper_injection_patterns(self, classes: list[ClassInfo]) -> HelperInjectionPattern:
         """Analyze helper injection patterns in initialization."""
         pattern = HelperInjectionPattern()
+
+        # Use sets to collect unique values, then convert to lists
+        helper_methods_set: set[str] = set()
+        dependency_injection_set: set[str] = set()
 
         for class_info in classes:
             # Check initialization code for helper patterns
@@ -1103,17 +1148,25 @@ class AppDaemonParser:
 
                     for helper_method in helper_patterns:
                         if helper_method in source:
-                            pattern.helper_methods_used.append(helper_method)
+                            helper_methods_set.add(helper_method)
 
                 # Look for dependency injection patterns
                 if "dependencies" in source or "self.get_app(" in source:
-                    pattern.dependency_injection.append("AppDaemon dependency injection")
+                    dependency_injection_set.add("AppDaemon dependency injection")
+
+        # Convert sets to sorted lists for deterministic output
+        pattern.helper_methods_used = sorted(list(helper_methods_set))
+        pattern.dependency_injection = sorted(list(dependency_injection_set))
 
         return pattern
 
     def _analyze_error_handling_patterns(self, classes: list[ClassInfo]) -> ErrorHandlingPattern:
         """Analyze error handling and recovery patterns."""
         pattern = ErrorHandlingPattern()
+
+        # Use sets to collect unique values, then convert to lists
+        recovery_mechanisms_set: set[str] = set()
+        alert_patterns_set: set[str] = set()
 
         for class_info in classes:
             for method in class_info.methods:
@@ -1135,17 +1188,27 @@ class AppDaemonParser:
                 recovery_keywords = ["retry", "fallback", "recover", "backup", "alternative"]
                 for keyword in recovery_keywords:
                     if keyword in source:
-                        pattern.recovery_mechanisms.append(f"{keyword} mechanism in {method.name}")
+                        recovery_mechanisms_set.add(f"{keyword} mechanism in {method.name}")
 
                 # Look for alert patterns
                 if "alert" in source or "warning" in source:
-                    pattern.alert_patterns.append(f"Alert pattern in {method.name}")
+                    alert_patterns_set.add(f"Alert pattern in {method.name}")
+
+        # Convert sets to sorted lists for deterministic output
+        pattern.recovery_mechanisms = sorted(list(recovery_mechanisms_set))
+        pattern.alert_patterns = sorted(list(alert_patterns_set))
 
         return pattern
 
     def _analyze_constant_hierarchy(self, constants_used: set[str]) -> ConstantHierarchy:
         """Analyze hierarchical constant usage patterns."""
         hierarchy = ConstantHierarchy()
+
+        # Use sets to collect unique values, then convert to lists
+        person_constants_set: set[str] = set()
+        device_constants_set: set[str] = set()
+        action_constants_set: set[str] = set()
+        general_constants_set: set[str] = set()
 
         for const in constants_used:
             parts = const.split(".")
@@ -1157,15 +1220,25 @@ class AppDaemonParser:
                     hierarchy.hierarchical_constants[prefix] = []
                 hierarchy.hierarchical_constants[prefix].append(const)
 
-                # Categorize by type
+                # Categorize by type using sets
                 if prefix == "Persons":
-                    hierarchy.person_constants.append(const)
+                    person_constants_set.add(const)
                 elif prefix == "Home":
-                    hierarchy.device_constants.append(const)
+                    device_constants_set.add(const)
                 elif prefix == "Actions":
-                    hierarchy.action_constants.append(const)
+                    action_constants_set.add(const)
                 elif prefix == "General":
-                    hierarchy.general_constants.append(const)
+                    general_constants_set.add(const)
+
+        # Convert sets to sorted lists for deterministic output
+        hierarchy.person_constants = sorted(list(person_constants_set))
+        hierarchy.device_constants = sorted(list(device_constants_set))
+        hierarchy.action_constants = sorted(list(action_constants_set))
+        hierarchy.general_constants = sorted(list(general_constants_set))
+
+        # Sort the hierarchical_constants lists as well
+        for prefix in hierarchy.hierarchical_constants:
+            hierarchy.hierarchical_constants[prefix] = sorted(list(set(hierarchy.hierarchical_constants[prefix])))
 
         return hierarchy
 
@@ -1190,10 +1263,8 @@ class AppDaemonParser:
             start_variable = "perf_start"
 
         # Look for specific threshold patterns (300ms is common in this codebase)
-        threshold_patterns = [r"perf_time_ms\s*>\s*(\d+)", r"execution_time\s*>\s*(\d+)", r"duration\s*>\s*(\d+)"]
-
-        for pattern in threshold_patterns:
-            match = re.search(pattern, source_text)
+        for pattern in self.threshold_patterns:
+            match = pattern.search(source_text)
             if match:
                 threshold_ms = int(match.group(1))
                 break
@@ -1212,10 +1283,8 @@ class AppDaemonParser:
                 break
 
         # Check for execution logging patterns
-        log_patterns = [r"\[Exec:\s*\{.*perf_time.*\}\]", r"Execution time:", r"Performance:"]
-
-        for pattern in log_patterns:
-            if re.search(pattern, source_text, re.IGNORECASE):
+        for pattern in self.log_patterns:
+            if pattern.search(source_text):
                 log_pattern = "[Exec: {perf_time_ms:.1f}ms]"
                 break
 

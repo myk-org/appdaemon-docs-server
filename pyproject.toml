@@ -9,6 +9,7 @@ dependencies = [
   "jinja2>=3.1.6",
   "markdown>=3.8.2",
   "pygments>=2.19.2",
+  "pyyaml>=6.0.0",
   "uvicorn[standard]>=0.35.0",
   "python-multipart>=0.0.6",
   "watchdog>=4.0.0",

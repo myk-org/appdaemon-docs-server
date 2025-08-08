@@ -453,8 +453,9 @@ async def documentation_index(request: Request) -> HTMLResponse:
     try:
         files = await docs_service.get_file_list()
 
-        # Get app counts based on apps.yaml
-        app_counts = count_active_apps(APPS_DIR, DOCS_DIR)
+        # Get app counts based on apps.yaml, using precomputed doc stems to avoid duplicate file scans
+        doc_stems = [str(file.get("stem", Path(str(file["name"])).stem)) for file in files]
+        app_counts = count_active_apps(APPS_DIR, doc_stems=doc_stems)
 
         return templates.TemplateResponse(
             "index.html",

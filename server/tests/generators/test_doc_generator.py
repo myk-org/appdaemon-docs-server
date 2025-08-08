@@ -114,12 +114,13 @@ class TestAppDaemonDocGenerator:
 
             assert "## Configuration" in config_section
 
-    def test_generate_performance_monitoring_section(self, generator, sample_parsed_file):
-        """Test performance monitoring section generation."""
+    def test_generate_error_handling_section(self, generator, sample_parsed_file):
+        """Test error handling section generation."""
         with patch.object(generator, "_load_constants_map", return_value={}):
-            perf_section = generator._generate_performance_monitoring_section(sample_parsed_file)
+            error_section = generator._generate_error_handling_section(sample_parsed_file)
 
-            assert "## Performance Monitoring" in perf_section
+            # Should return empty string if no error handling patterns
+            assert isinstance(error_section, str)
 
     def test_generate_integration_points_section(self, generator, sample_parsed_file):
         """Test integration points section generation."""

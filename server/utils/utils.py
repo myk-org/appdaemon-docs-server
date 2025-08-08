@@ -1,6 +1,8 @@
 """Utility functions for the documentation server."""
 
+import logging
 import os
+import sys
 import yaml  # type: ignore[import-untyped]
 from pathlib import Path
 from typing import Any
@@ -57,21 +59,30 @@ def count_documentation_files(docs_dir: Path) -> int:
     return len(list(docs_dir.glob("*.md")))
 
 
-def count_active_apps(apps_dir: Path, docs_dir: Path) -> dict[str, int | list[str]]:
+def count_active_apps(
+    apps_dir: Path, docs_dir: Path | None = None, doc_stems: list[str] | None = None
+) -> dict[str, int | list[str]]:
     """
     Count active apps based on apps.yaml configuration.
 
     Args:
         apps_dir: Path to the apps directory containing apps.yaml
-        docs_dir: Path to the documentation directory
+        docs_dir: Path to the documentation directory (optional if doc_stems provided)
+        doc_stems: Precomputed list of documentation file stems (optional)
 
     Returns:
         Dictionary with counts and module lists for filtering
     """
     apps_yaml_path = apps_dir / "apps.yaml"
 
-    # Get all documentation files
-    doc_files = [f.stem for f in docs_dir.glob("*.md")] if docs_dir.exists() else []
+    # Get documentation file stems - either from parameter or by scanning
+    if doc_stems is not None:
+        doc_files = doc_stems
+    elif docs_dir is not None:
+        doc_files = [f.stem for f in docs_dir.glob("*.md")] if docs_dir.exists() else []
+    else:
+        raise ValueError("Either docs_dir or doc_stems must be provided")
+
     total = len(doc_files)
 
     if not apps_yaml_path.exists():
@@ -89,15 +100,29 @@ def count_active_apps(apps_dir: Path, docs_dir: Path) -> dict[str, int | list[st
         with open(apps_yaml_path, "r", encoding="utf-8") as f:
             apps_config = yaml.safe_load(f)
 
+        # Validate that YAML loaded content is a dictionary
+        if not isinstance(apps_config, dict):
+            error_msg = (
+                f"Invalid apps.yaml format: expected dictionary, got {type(apps_config).__name__}. "
+                f"Content: {apps_config}"
+            )
+            logging.error(error_msg)
+            raise ValueError(error_msg)
+
         # Get unique modules configured in apps.yaml
         active_modules = set()
         for app, config in apps_config.items():
             if isinstance(config, dict) and config.get("module"):
                 active_modules.add(config["module"])
 
+        # Use set operations for efficient filtering
+        doc_stems_set = set(doc_files)
+        active_in_docs = active_modules & doc_stems_set
+        inactive_in_docs = doc_stems_set - active_modules
+
         # Convert to sorted lists
-        active_modules_list = sorted(list(active_modules))
-        inactive_modules_list = sorted(list(set(doc_files) - active_modules))
+        active_modules_list = sorted(list(active_in_docs))
+        inactive_modules_list = sorted(list(inactive_in_docs))
 
         return {
             "active": len(active_modules_list),
@@ -108,8 +133,30 @@ def count_active_apps(apps_dir: Path, docs_dir: Path) -> dict[str, int | list[st
             "all_modules": sorted(doc_files),
         }
 
-    except Exception:
-        # Fallback on error
+    except yaml.YAMLError as e:
+        error_msg = f"YAML parsing error in {apps_yaml_path}: {e}"
+        logging.error(error_msg)
+        return {
+            "active": 0,
+            "total": total,
+            "inactive": total,
+            "active_modules": [],
+            "inactive_modules": doc_files,
+            "all_modules": doc_files,
+        }
+    except (OSError, IOError) as e:
+        error_msg = f"File I/O error reading {apps_yaml_path}: {e}"
+        logging.error(error_msg)
+        return {
+            "active": 0,
+            "total": total,
+            "inactive": total,
+            "active_modules": [],
+            "inactive_modules": doc_files,
+            "all_modules": doc_files,
+        }
+    except ValueError:
+        # Already logged in validation above
         return {
             "active": 0,
             "total": total,
@@ -152,6 +199,60 @@ def get_server_config() -> dict[str, Any]:
     }
 
 
+def _check_external_apps_dir(apps_dir: Path) -> tuple[bool, bool]:
+    """
+    Check if APPS_DIR is external to the repository and if it's mounted read-only.
+
+    Args:
+        apps_dir: Path to the apps directory
+
+    Returns:
+        Tuple of (is_external, is_readonly)
+    """
+    try:
+        # Get current working directory and check if apps_dir is within it
+        cwd = Path.cwd()
+        try:
+            apps_dir.relative_to(cwd)
+            is_external = False
+        except ValueError:
+            # apps_dir is not within current working directory
+            is_external = True
+
+        # Check if directory is read-only
+        is_readonly = False
+        if apps_dir.exists():
+            try:
+                # Try to create a temporary file to test write permissions
+                test_file = apps_dir / ".write_test_temp"
+                test_file.touch()
+                test_file.unlink()  # Clean up
+            except (PermissionError, OSError):
+                is_readonly = True
+
+        return is_external, is_readonly
+    except Exception:
+        # If any error occurs, assume safe defaults
+        return False, False
+
+
+def _get_windows_docker_path_hint() -> str | None:
+    """
+    Get Windows Docker path hint if running on Windows.
+
+    Returns:
+        Path hint string for Windows or None for other platforms
+    """
+    if sys.platform == "win32":
+        return (
+            "💡 Windows Docker Tip: Use forward slashes and drive mapping:\n"
+            "   Windows path: C:\\path\\to\\apps\n"
+            "   Docker path:  /c/path/to/apps or //c/path/to/apps\n"
+            "   Example: -v //c/Users/username/apps:/app/appdaemon-apps"
+        )
+    return None
+
+
 def print_startup_info(
     dir_status: "DirectoryStatus", server_config: dict[str, Any], env_config: dict[str, Any]
 ) -> None:
@@ -178,6 +279,31 @@ def print_startup_info(
     print(f"Apps directory: {dir_status.apps_dir}")
     print(f"Documentation directory: {dir_status.docs_dir}")
     print(f"Server will be available at: http://{server_config['host']}:{server_config['port']}")
+
+    # Check for external APPS_DIR and add safety notes
+    is_external, is_readonly = _check_external_apps_dir(dir_status.apps_dir)
+
+    if is_external:
+        print()
+        print("📍 External Apps Directory Detected:")
+        print(f"   Apps directory is outside the repository: {dir_status.apps_dir}")
+        if is_readonly:
+            print("   🔒 Directory is mounted read-only - file watcher will monitor but cannot modify files")
+        else:
+            print("   ⚠️  Directory has write access - changes will affect external filesystem")
+
+        print("   💡 Safety Notes:")
+        print("      • External paths allow full filesystem access")
+        print("      • Consider using read-only mounts for production")
+        print("      • Ensure proper backup of external directories")
+        print("      • Review file permissions for security")
+
+    # Add Windows Docker path hints if applicable
+    windows_hint = _get_windows_docker_path_hint()
+    if windows_hint:
+        print()
+        print(windows_hint)
+
     print()
 
     # Configuration section

@@ -43,7 +43,7 @@ def run_container() -> None:
         print("💡 APPS_DIR is required for container to access AppDaemon apps")
         sys.exit(1)
 
-    apps_path = Path(apps_dir).resolve()
+    apps_path = Path(os.path.expandvars(os.path.expanduser(apps_dir))).resolve()
 
     # Note: Apps directory can be anywhere on the system for flexibility
     # No path restrictions enforced - allows documentation of external AppDaemon installations
@@ -120,7 +120,7 @@ def run_local_python() -> None:
 
     # Get apps directory path (can be anywhere on the system)
     apps_dir = os.environ["APPS_DIR"]
-    apps_path = Path(apps_dir).resolve()
+    apps_path = Path(os.path.expandvars(os.path.expanduser(apps_dir))).resolve()
 
     # Note: No path restrictions - allows documentation of external AppDaemon installations
 
