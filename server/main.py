@@ -26,6 +26,7 @@ from server.processors.markdown import MarkdownProcessor
 from server.services.docs import DocumentationService
 from server.utils.utils import (
     DirectoryStatus,
+    count_active_apps,
     get_environment_config,
     get_server_config,
     print_startup_info,
@@ -451,6 +452,10 @@ async def documentation_index(request: Request) -> HTMLResponse:
     """
     try:
         files = await docs_service.get_file_list()
+
+        # Get app counts based on apps.yaml
+        app_counts = count_active_apps(APPS_DIR, DOCS_DIR)
+
         return templates.TemplateResponse(
             "index.html",
             {
@@ -458,6 +463,7 @@ async def documentation_index(request: Request) -> HTMLResponse:
                 "title": "AppDaemon Documentation",
                 "files": files,
                 "total_files": len(files),
+                "app_counts": app_counts,
             },
         )
     except Exception as e:

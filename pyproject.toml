@@ -57,6 +57,7 @@ dev = [
   "ipython>=9.4.0",
   "types-markdown>=3.8.0.20250708",
   "types-pygments>=2.19.0.20250715",
+  "types-pyyaml>=6.0.12.20250516",
   "websockets>=15.0.1",
 ]
 tests = [

@@ -27,6 +27,10 @@ class BatchDocGenerator:
         self.docs_dir = Path(docs_dir)
         self.doc_generator = AppDaemonDocGenerator(str(self.docs_dir))
 
+        # Look for apps.yaml in the apps directory
+        apps_yaml_candidate = self.apps_dir / "apps.yaml"
+        self.apps_yaml_path = apps_yaml_candidate if apps_yaml_candidate.exists() else None
+
         # Ensure docs directory exists
         self.docs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -65,8 +69,8 @@ class BatchDocGenerator:
             Tuple of (documentation_content, success_flag)
         """
         try:
-            # Parse the file
-            parsed_file = parse_appdaemon_file(file_path)
+            # Parse the file with apps.yaml context
+            parsed_file = parse_appdaemon_file(file_path, apps_yaml_path=self.apps_yaml_path)
 
             # Generate documentation
             docs = self.doc_generator.generate_documentation(parsed_file)

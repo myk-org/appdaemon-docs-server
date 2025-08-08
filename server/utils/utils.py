@@ -1,6 +1,7 @@
 """Utility functions for the documentation server."""
 
 import os
+import yaml  # type: ignore[import-untyped]
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +55,69 @@ def count_documentation_files(docs_dir: Path) -> int:
         return 0
 
     return len(list(docs_dir.glob("*.md")))
+
+
+def count_active_apps(apps_dir: Path, docs_dir: Path) -> dict[str, int | list[str]]:
+    """
+    Count active apps based on apps.yaml configuration.
+
+    Args:
+        apps_dir: Path to the apps directory containing apps.yaml
+        docs_dir: Path to the documentation directory
+
+    Returns:
+        Dictionary with counts and module lists for filtering
+    """
+    apps_yaml_path = apps_dir / "apps.yaml"
+
+    # Get all documentation files
+    doc_files = [f.stem for f in docs_dir.glob("*.md")] if docs_dir.exists() else []
+    total = len(doc_files)
+
+    if not apps_yaml_path.exists():
+        # Fallback if no apps.yaml
+        return {
+            "active": 0,
+            "total": total,
+            "inactive": total,
+            "active_modules": [],
+            "inactive_modules": doc_files,
+            "all_modules": doc_files,
+        }
+
+    try:
+        with open(apps_yaml_path, "r", encoding="utf-8") as f:
+            apps_config = yaml.safe_load(f)
+
+        # Get unique modules configured in apps.yaml
+        active_modules = set()
+        for app, config in apps_config.items():
+            if isinstance(config, dict) and config.get("module"):
+                active_modules.add(config["module"])
+
+        # Convert to sorted lists
+        active_modules_list = sorted(list(active_modules))
+        inactive_modules_list = sorted(list(set(doc_files) - active_modules))
+
+        return {
+            "active": len(active_modules_list),
+            "total": total,
+            "inactive": len(inactive_modules_list),
+            "active_modules": active_modules_list,
+            "inactive_modules": inactive_modules_list,
+            "all_modules": sorted(doc_files),
+        }
+
+    except Exception:
+        # Fallback on error
+        return {
+            "active": 0,
+            "total": total,
+            "inactive": total,
+            "active_modules": [],
+            "inactive_modules": doc_files,
+            "all_modules": doc_files,
+        }
 
 
 def get_environment_config() -> dict[str, Any]:

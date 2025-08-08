@@ -8,6 +8,8 @@ It uses AST parsing to safely analyze code without executing it.
 """
 
 import ast
+import re
+import yaml  # type: ignore[import-untyped]
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -152,6 +154,59 @@ class ClassInfo:
 
 
 @dataclass
+class AppDependency:
+    """Information about app dependency from apps.yaml."""
+
+    app_name: str
+    module_name: str
+    class_name: str
+    dependencies: list[str] = field(default_factory=list)
+
+
+@dataclass
+class PersonCentricPattern:
+    """Information about person-centric automation patterns."""
+
+    person_entities: list[str] = field(default_factory=list)
+    notification_channels: list[str] = field(default_factory=list)
+    presence_detection: list[str] = field(default_factory=list)
+    device_tracking: list[str] = field(default_factory=list)
+    personalized_settings: list[str] = field(default_factory=list)
+
+
+@dataclass
+class HelperInjectionPattern:
+    """Information about helper injection patterns."""
+
+    has_helpers_injection: bool = False
+    helper_methods_used: list[str] = field(default_factory=list)
+    initialization_helpers: list[str] = field(default_factory=list)
+    dependency_injection: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ErrorHandlingPattern:
+    """Information about error handling patterns."""
+
+    has_try_catch: bool = False
+    error_notification: bool = False
+    recovery_mechanisms: list[str] = field(default_factory=list)
+    alert_patterns: list[str] = field(default_factory=list)
+    logging_on_error: bool = False
+
+
+@dataclass
+class ConstantHierarchy:
+    """Information about hierarchical constant usage."""
+
+    hierarchical_constants: dict[str, list[str]] = field(default_factory=dict)
+    person_constants: list[str] = field(default_factory=list)
+    device_constants: list[str] = field(default_factory=list)
+    action_constants: list[str] = field(default_factory=list)
+    general_constants: list[str] = field(default_factory=list)
+
+
+@dataclass
 class ParsedFile:
     """Complete parsed information from an AppDaemon file."""
 
@@ -165,15 +220,24 @@ class ParsedFile:
     all_entities: list[str] = field(default_factory=list)
     all_service_calls: list[str] = field(default_factory=list)
     complexity_score: int = 0
+    # Enhanced analysis results
+    app_dependencies: list[AppDependency] = field(default_factory=list)
+    person_centric_patterns: PersonCentricPattern = field(default_factory=PersonCentricPattern)
+    helper_injection_patterns: HelperInjectionPattern = field(default_factory=HelperInjectionPattern)
+    error_handling_patterns: ErrorHandlingPattern = field(default_factory=ErrorHandlingPattern)
+    constant_hierarchy: ConstantHierarchy = field(default_factory=ConstantHierarchy)
 
 
 class AppDaemonParser:
     """Parser for AppDaemon automation Python files."""
 
-    def __init__(self) -> None:
+    def __init__(self, apps_yaml_path: str | Path | None = None) -> None:
         """Initialize the parser."""
         self.current_file = ""
         self.source_lines: list[str] = []
+        self.apps_yaml_path = Path(apps_yaml_path) if apps_yaml_path else None
+        self.apps_config: dict[str, Any] = {}
+        self._load_apps_config()
 
         # Enhanced parsing patterns
         self.service_patterns = {
@@ -261,6 +325,13 @@ class AppDaemonParser:
                 + len(class_info.automation_flows) * 5
             )
 
+        # Enhanced analysis
+        app_dependencies = self._extract_app_dependencies(file_path)
+        person_centric_patterns = self._analyze_person_centric_patterns(classes, constants_used)
+        helper_injection_patterns = self._analyze_helper_injection_patterns(classes)
+        error_handling_patterns = self._analyze_error_handling_patterns(classes)
+        constant_hierarchy = self._analyze_constant_hierarchy(constants_used)
+
         return ParsedFile(
             file_path=str(file_path),
             imports=imports,
@@ -271,6 +342,11 @@ class AppDaemonParser:
             all_entities=list(set(all_entities)),
             all_service_calls=list(set(all_service_calls)),
             complexity_score=complexity_score,
+            app_dependencies=app_dependencies,
+            person_centric_patterns=person_centric_patterns,
+            helper_injection_patterns=helper_injection_patterns,
+            error_handling_patterns=error_handling_patterns,
+            constant_hierarchy=constant_hierarchy,
         )
 
     def _extract_imports(self, tree: ast.AST) -> list[str]:
@@ -851,53 +927,6 @@ class AppDaemonParser:
                         )
                     )
 
-    def _analyze_performance_pattern(self, method_node: ast.FunctionDef) -> PerformancePattern | None:
-        """Analyze method for performance monitoring patterns."""
-        has_timing = False
-        threshold_ms = None
-        start_variable = None
-        log_pattern = None
-        alert_pattern = None
-        line_number = method_node.lineno
-
-        # Look for performance timing patterns in method source
-        source_text = "\n".join(self.source_lines[method_node.lineno - 1 : method_node.end_lineno])
-
-        # Check for performance patterns in source
-        if "perf_start" in source_text:
-            has_timing = True
-            start_variable = "perf_start"
-
-        # Look for threshold patterns
-        if "perf_time_ms > 300" in source_text:
-            threshold_ms = 300
-        elif "perf_time_ms >" in source_text:
-            # Try to extract threshold from source
-            import re
-
-            match = re.search(r"perf_time_ms > (\d+)", source_text)
-            if match:
-                threshold_ms = int(match.group(1))
-
-        # Check for performance alert patterns
-        if "PERFORMANCE ALERT" in source_text:
-            alert_pattern = "⚠️ PERFORMANCE ALERT"
-
-        if "Exec:" in source_text and "perf_time_ms" in source_text:
-            log_pattern = "[Exec: {perf_time_ms:.1f}ms]"
-
-        if has_timing:
-            return PerformancePattern(
-                has_timing=has_timing,
-                threshold_ms=threshold_ms,
-                start_variable=start_variable,
-                log_pattern=log_pattern,
-                alert_pattern=alert_pattern,
-                line_number=line_number,
-            )
-
-        return None
-
     def _extract_entities_from_node(self, node: ast.AST) -> list[str]:
         """Extract entity references from any AST node."""
         entities = []
@@ -996,16 +1025,223 @@ class AppDaemonParser:
             }
         return None
 
+    def _load_apps_config(self) -> None:
+        """Load apps.yaml configuration if available."""
+        if self.apps_yaml_path and self.apps_yaml_path.exists():
+            try:
+                with open(self.apps_yaml_path, "r", encoding="utf-8") as f:
+                    self.apps_config = yaml.safe_load(f) or {}
+            except Exception:
+                self.apps_config = {}
 
-def parse_appdaemon_file(file_path: str | Path) -> ParsedFile:
+    def _extract_app_dependencies(self, file_path: Path) -> list[AppDependency]:
+        """Extract app dependencies from apps.yaml configuration."""
+        dependencies = []
+
+        # Get module name from file path
+        module_name = file_path.stem
+
+        # Find all apps that use this module
+        for app_name, app_config in self.apps_config.items():
+            if isinstance(app_config, dict) and app_config.get("module") == module_name:
+                dep = AppDependency(
+                    app_name=app_name,
+                    module_name=app_config.get("module", module_name),
+                    class_name=app_config.get("class", ""),
+                    dependencies=app_config.get("dependencies", []),
+                )
+                dependencies.append(dep)
+
+        return dependencies
+
+    def _analyze_person_centric_patterns(
+        self, classes: list[ClassInfo], constants_used: set[str]
+    ) -> PersonCentricPattern:
+        """Analyze person-centric automation patterns."""
+        pattern = PersonCentricPattern()
+
+        # Look for person-related constants
+        for const in constants_used:
+            if const.startswith("Persons."):
+                pattern.person_entities.append(const)
+
+                # Categorize by type
+                if "telegram" in const.lower():
+                    pattern.notification_channels.append(const)
+                elif "tracker" in const.lower() or "presence" in const.lower() or "home_sensor" in const.lower():
+                    pattern.presence_detection.append(const)
+                elif "device_tracker" in const.lower() or "phone" in const.lower() or "watch" in const.lower():
+                    pattern.device_tracking.append(const)
+                elif "good_night" in const.lower() or "battery_monitor" in const.lower():
+                    pattern.personalized_settings.append(const)
+
+        return pattern
+
+    def _analyze_helper_injection_patterns(self, classes: list[ClassInfo]) -> HelperInjectionPattern:
+        """Analyze helper injection patterns in initialization."""
+        pattern = HelperInjectionPattern()
+
+        for class_info in classes:
+            # Check initialization code for helper patterns
+            if class_info.initialize_code:
+                source = class_info.initialize_code.lower()
+
+                if "helpers" in source:
+                    pattern.has_helpers_injection = True
+
+                    # Extract helper methods being used
+                    helper_patterns = [
+                        "send_notify",
+                        "notify_telegram",
+                        "log_action",
+                        "get_state_with_retry",
+                        "wait_for_state",
+                        "check_condition",
+                        "format_message",
+                        "parse_entity",
+                    ]
+
+                    for helper_method in helper_patterns:
+                        if helper_method in source:
+                            pattern.helper_methods_used.append(helper_method)
+
+                # Look for dependency injection patterns
+                if "dependencies" in source or "self.get_app(" in source:
+                    pattern.dependency_injection.append("AppDaemon dependency injection")
+
+        return pattern
+
+    def _analyze_error_handling_patterns(self, classes: list[ClassInfo]) -> ErrorHandlingPattern:
+        """Analyze error handling and recovery patterns."""
+        pattern = ErrorHandlingPattern()
+
+        for class_info in classes:
+            for method in class_info.methods:
+                source = method.source_code.lower()
+
+                # Check for try-catch blocks
+                if "try:" in source and ("except" in source or "finally" in source):
+                    pattern.has_try_catch = True
+
+                # Check for error notifications
+                if "error" in source and ("notify" in source or "telegram" in source):
+                    pattern.error_notification = True
+
+                # Check for logging on errors
+                if "error" in source and "log" in source:
+                    pattern.logging_on_error = True
+
+                # Look for recovery mechanisms
+                recovery_keywords = ["retry", "fallback", "recover", "backup", "alternative"]
+                for keyword in recovery_keywords:
+                    if keyword in source:
+                        pattern.recovery_mechanisms.append(f"{keyword} mechanism in {method.name}")
+
+                # Look for alert patterns
+                if "alert" in source or "warning" in source:
+                    pattern.alert_patterns.append(f"Alert pattern in {method.name}")
+
+        return pattern
+
+    def _analyze_constant_hierarchy(self, constants_used: set[str]) -> ConstantHierarchy:
+        """Analyze hierarchical constant usage patterns."""
+        hierarchy = ConstantHierarchy()
+
+        for const in constants_used:
+            parts = const.split(".")
+            if len(parts) >= 2:
+                prefix = parts[0]
+
+                # Initialize hierarchy if not exists
+                if prefix not in hierarchy.hierarchical_constants:
+                    hierarchy.hierarchical_constants[prefix] = []
+                hierarchy.hierarchical_constants[prefix].append(const)
+
+                # Categorize by type
+                if prefix == "Persons":
+                    hierarchy.person_constants.append(const)
+                elif prefix == "Home":
+                    hierarchy.device_constants.append(const)
+                elif prefix == "Actions":
+                    hierarchy.action_constants.append(const)
+                elif prefix == "General":
+                    hierarchy.general_constants.append(const)
+
+        return hierarchy
+
+    def _analyze_performance_pattern(self, method_node: ast.FunctionDef) -> PerformancePattern | None:
+        """Analyze method for performance monitoring patterns."""
+        has_timing = False
+        threshold_ms = None
+        start_variable = None
+        log_pattern = None
+        alert_pattern = None
+        line_number = method_node.lineno
+
+        # Look for performance timing patterns in method source
+        if method_node.end_lineno:
+            source_text = "\n".join(self.source_lines[method_node.lineno - 1 : method_node.end_lineno])
+        else:
+            source_text = "\n".join(self.source_lines[method_node.lineno - 1 : method_node.lineno + 10])
+
+        # Enhanced performance pattern detection
+        if "perf_start" in source_text or "time.time()" in source_text:
+            has_timing = True
+            start_variable = "perf_start"
+
+        # Look for specific threshold patterns (300ms is common in this codebase)
+        threshold_patterns = [r"perf_time_ms\s*>\s*(\d+)", r"execution_time\s*>\s*(\d+)", r"duration\s*>\s*(\d+)"]
+
+        for pattern in threshold_patterns:
+            match = re.search(pattern, source_text)
+            if match:
+                threshold_ms = int(match.group(1))
+                break
+
+        # Default threshold if timing detected but no specific threshold found
+        if has_timing and threshold_ms is None:
+            if "300" in source_text:
+                threshold_ms = 300
+
+        # Check for performance alert patterns
+        alert_patterns = ["PERFORMANCE ALERT", "⚠️", "performance warning", "slow execution", "execution exceeded"]
+
+        for alert in alert_patterns:
+            if alert.lower() in source_text.lower():
+                alert_pattern = f"⚠️ {alert.upper()}"
+                break
+
+        # Check for execution logging patterns
+        log_patterns = [r"\[Exec:\s*\{.*perf_time.*\}\]", r"Execution time:", r"Performance:"]
+
+        for pattern in log_patterns:
+            if re.search(pattern, source_text, re.IGNORECASE):
+                log_pattern = "[Exec: {perf_time_ms:.1f}ms]"
+                break
+
+        if has_timing:
+            return PerformancePattern(
+                has_timing=has_timing,
+                threshold_ms=threshold_ms,
+                start_variable=start_variable,
+                log_pattern=log_pattern,
+                alert_pattern=alert_pattern,
+                line_number=line_number,
+            )
+
+        return None
+
+
+def parse_appdaemon_file(file_path: str | Path, apps_yaml_path: str | Path | None = None) -> ParsedFile:
     """
     Convenience function to parse an AppDaemon file.
 
     Args:
         file_path: Path to the Python file to parse
+        apps_yaml_path: Optional path to apps.yaml configuration file
 
     Returns:
         ParsedFile containing all extracted information
     """
-    parser = AppDaemonParser()
+    parser = AppDaemonParser(apps_yaml_path=apps_yaml_path)
     return parser.parse_file(file_path)

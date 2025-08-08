@@ -52,14 +52,19 @@ class AppDaemonDocGenerator:
         # Configuration section
         sections.append(self._generate_enhanced_configuration_section(parsed_file))
 
-        # Performance monitoring section
-        sections.append(self._generate_performance_monitoring_section(parsed_file))
-
         # Integration points
         sections.append(self._generate_integration_points_section(parsed_file))
 
-        # Remove old sections as they are replaced by enhanced versions
-        pass
+        # Enhanced sections for new analysis patterns
+        sections.append(self._generate_app_dependencies_section(parsed_file))
+
+        sections.append(self._generate_person_centric_section(parsed_file))
+
+        sections.append(self._generate_helper_injection_section(parsed_file))
+
+        sections.append(self._generate_error_handling_section(parsed_file))
+
+        sections.append(self._generate_constant_hierarchy_section(parsed_file))
 
         return "\n\n".join(sections)
 
@@ -550,47 +555,6 @@ class AppDaemonDocGenerator:
 
         return section
 
-    def _generate_performance_monitoring_section(self, parsed_file: ParsedFile) -> str:
-        """Generate performance monitoring section like climate.md."""
-        section = "## Performance Monitoring\n\n"
-
-        # Check if any methods have performance monitoring
-        has_monitoring = any(
-            any(m.performance_pattern and m.performance_pattern.has_timing for m in cls.methods)
-            for cls in parsed_file.classes
-        )
-
-        if has_monitoring:
-            section += "This automation includes real-time performance monitoring:\n\n"
-
-            # Find threshold
-            threshold = 300  # default
-            for cls in parsed_file.classes:
-                for method in cls.methods:
-                    if method.performance_pattern and method.performance_pattern.threshold_ms:
-                        threshold = method.performance_pattern.threshold_ms
-                        break
-
-            section += "- **Timing:** Each callback execution is measured\n"
-            section += f"- **Threshold:** {threshold}ms alert threshold for critical operations\n"
-            section += "- **Logging:** Performance metrics logged with each action\n"
-            section += "- **Pattern:** Execute device actions first, then logging operations\n\n"
-
-            section += "### Performance-First Design\n\n"
-            section += "```python\n"
-            section += "# ✅ CORRECT - Action first, then logging\n"
-            section += "self.turn_on(entity)                    # Execute immediately\n"
-            section += "state = self.get_state(entity)          # Log after action\n"
-            section += 'self.log(f"Action completed: {state}")\n\n'
-            section += "# ❌ INCORRECT - Logging delays action\n"
-            section += "state_before = self.get_state(entity)   # Unnecessary delay\n"
-            section += "self.turn_on(entity)                    # Delayed execution\n"
-            section += "```\n\n"
-        else:
-            section += "No performance monitoring detected in this module.\n\n"
-
-        return section
-
     def _generate_integration_points_section(self, parsed_file: ParsedFile) -> str:
         """Generate integration points section like climate.md."""
         section = "## Integration Points\n\n"
@@ -747,3 +711,186 @@ class AppDaemonDocGenerator:
                     details += f"  - `{method.name}()` - {action_summary}{entity_text}\n"
 
         return details.strip()
+
+    def _generate_app_dependencies_section(self, parsed_file: ParsedFile) -> str:
+        """Generate app dependencies section from apps.yaml analysis."""
+        if not parsed_file.app_dependencies:
+            return ""
+
+        section = "## App Dependencies\n\n"
+        section += "### Apps.yaml Configuration\n\n"
+        section += "This module is configured in `apps.yaml` with the following app instances:\n\n"
+
+        for dep in parsed_file.app_dependencies:
+            section += f"#### {dep.app_name}\n\n"
+            section += f"- **Module**: `{dep.module_name}`\n"
+            section += f"- **Class**: `{dep.class_name}`\n"
+
+            if dep.dependencies:
+                section += f"- **Dependencies**: {', '.join(dep.dependencies)}\n"
+            else:
+                section += "- **Dependencies**: None\n"
+            section += "\n"
+
+        return section
+
+    def _generate_person_centric_section(self, parsed_file: ParsedFile) -> str:
+        """Generate person-centric automation patterns section."""
+        patterns = parsed_file.person_centric_patterns
+
+        if not patterns.person_entities:
+            return ""
+
+        section = "## Person-Centric Automation\n\n"
+        section += "This automation implements person-specific behavior patterns:\n\n"
+
+        if patterns.notification_channels:
+            section += "### Notification Channels\n"
+            for channel in patterns.notification_channels:
+                section += f"- **{channel}**: Personal notification delivery\n"
+            section += "\n"
+
+        if patterns.presence_detection:
+            section += "### Presence Detection\n"
+            for presence in patterns.presence_detection:
+                section += f"- **{presence}**: Location and presence tracking\n"
+            section += "\n"
+
+        if patterns.device_tracking:
+            section += "### Device Tracking\n"
+            for device in patterns.device_tracking:
+                section += f"- **{device}**: Personal device monitoring\n"
+            section += "\n"
+
+        if patterns.personalized_settings:
+            section += "### Personalized Settings\n"
+            for setting in patterns.personalized_settings:
+                section += f"- **{setting}**: Individual preference configuration\n"
+            section += "\n"
+
+        return section
+
+    def _generate_helper_injection_section(self, parsed_file: ParsedFile) -> str:
+        """Generate helper injection patterns section."""
+        patterns = parsed_file.helper_injection_patterns
+
+        if not patterns.has_helpers_injection:
+            return ""
+
+        section = "## Helper Injection Patterns\n\n"
+        section += "This automation uses dependency injection for helper functions:\n\n"
+
+        if patterns.helper_methods_used:
+            section += "### Helper Methods\n"
+            for helper in patterns.helper_methods_used:
+                section += f"- **{helper}()**: Injected utility function\n"
+            section += "\n"
+
+        if patterns.dependency_injection:
+            section += "### Dependency Injection\n"
+            for injection in patterns.dependency_injection:
+                section += f"- **{injection}**: Framework-level dependency management\n"
+            section += "\n"
+
+        section += "### Benefits\n"
+        section += "- **Code Reusability**: Shared utility functions across modules\n"
+        section += "- **Maintainability**: Centralized helper function updates\n"
+        section += "- **Testing**: Easier mocking and unit testing\n"
+        section += "- **Consistency**: Standardized operations across automations\n\n"
+
+        return section
+
+    def _generate_error_handling_section(self, parsed_file: ParsedFile) -> str:
+        """Generate error handling patterns section."""
+        patterns = parsed_file.error_handling_patterns
+
+        if not (patterns.has_try_catch or patterns.error_notification or patterns.recovery_mechanisms):
+            return ""
+
+        section = "## Error Handling & Recovery\n\n"
+        section += "This automation implements comprehensive error handling:\n\n"
+
+        if patterns.has_try_catch:
+            section += "### Exception Handling\n"
+            section += "- **Try-Catch Blocks**: Structured exception handling prevents automation failures\n"
+            section += "- **Graceful Degradation**: Automation continues operating despite individual failures\n\n"
+
+        if patterns.error_notification:
+            section += "### Error Notifications\n"
+            section += "- **Alert System**: Automatic notifications when errors occur\n"
+            section += "- **Telegram Integration**: Real-time error alerts to administrators\n\n"
+
+        if patterns.logging_on_error:
+            section += "### Error Logging\n"
+            section += "- **Detailed Logging**: Comprehensive error information for debugging\n"
+            section += "- **Performance Tracking**: Error impact on system performance\n\n"
+
+        if patterns.recovery_mechanisms:
+            section += "### Recovery Mechanisms\n"
+            for recovery in patterns.recovery_mechanisms:
+                section += f"- **{recovery}**: Automatic recovery strategies\n"
+            section += "\n"
+
+        if patterns.alert_patterns:
+            section += "### Alert Patterns\n"
+            for alert in patterns.alert_patterns:
+                section += f"- **{alert}**: Proactive monitoring and alerting\n"
+            section += "\n"
+
+        return section
+
+    def _generate_constant_hierarchy_section(self, parsed_file: ParsedFile) -> str:
+        """Generate constant hierarchy section showing configuration organization."""
+        hierarchy = parsed_file.constant_hierarchy
+
+        if not hierarchy.hierarchical_constants:
+            return ""
+
+        section = "## Configuration Hierarchy\n\n"
+        section += "This automation uses a hierarchical configuration structure:\n\n"
+
+        for prefix, constants in hierarchy.hierarchical_constants.items():
+            section += f"### {prefix} Configuration\n"
+
+            # Group constants by their second level for better organization
+            grouped_constants: dict[str, list[str]] = {}
+            for const in constants:
+                parts = const.split(".")
+                if len(parts) >= 3:
+                    second_level = f"{parts[0]}.{parts[1]}"
+                    if second_level not in grouped_constants:
+                        grouped_constants[second_level] = []
+                    grouped_constants[second_level].append(const)
+                else:
+                    if "General" not in grouped_constants:
+                        grouped_constants["General"] = []
+                    grouped_constants["General"].append(const)
+
+            for group, group_constants in grouped_constants.items():
+                if len(grouped_constants) > 1:
+                    section += f"#### {group}\n"
+
+                for const in sorted(group_constants):
+                    # Extract the property name (last part of the constant)
+                    property_name = const.split(".")[-1]
+                    section += f"- **{const}**: {property_name.replace('_', ' ').title()} configuration\n"
+
+                section += "\n"
+
+        # Add summary of configuration scope
+        total_constants = sum(len(constants) for constants in hierarchy.hierarchical_constants.values())
+        section += "### Configuration Scope\n"
+        section += f"- **Total Constants**: {total_constants} configuration references\n"
+
+        if hierarchy.person_constants:
+            section += f"- **Person-Specific**: {len(hierarchy.person_constants)} personal configuration items\n"
+        if hierarchy.device_constants:
+            section += f"- **Device Configuration**: {len(hierarchy.device_constants)} device references\n"
+        if hierarchy.action_constants:
+            section += f"- **Action Templates**: {len(hierarchy.action_constants)} predefined actions\n"
+        if hierarchy.general_constants:
+            section += f"- **General Settings**: {len(hierarchy.general_constants)} system-wide configurations\n"
+
+        section += "\n"
+
+        return section

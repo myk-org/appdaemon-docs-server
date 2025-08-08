@@ -45,14 +45,8 @@ def run_container() -> None:
 
     apps_path = Path(apps_dir).resolve()
 
-    # Validate apps_path is within project boundaries to prevent directory traversal
-    try:
-        apps_path.relative_to(project_root)
-    except ValueError:
-        print("❌ Error: Apps directory must be within project root for security")
-        print(f"   Project root: {project_root}")
-        print(f"   Apps path: {apps_path}")
-        sys.exit(1)
+    # Note: Apps directory can be anywhere on the system for flexibility
+    # No path restrictions enforced - allows documentation of external AppDaemon installations
 
     if not apps_path.exists():
         print(f"⚠️  Warning: Apps directory does not exist: {apps_path}")
@@ -107,7 +101,6 @@ def run_container() -> None:
 def run_local_python() -> None:
     """Run the development server with local Python."""
     env_file = validate_env_file()
-    project_root = env_file.parent
 
     # Load environment variables from .dev_env
     load_dotenv(env_file)
@@ -125,17 +118,11 @@ def run_local_python() -> None:
             print(f"   - {var}")
         sys.exit(1)
 
-    # Validate apps directory path for security
+    # Get apps directory path (can be anywhere on the system)
     apps_dir = os.environ["APPS_DIR"]
     apps_path = Path(apps_dir).resolve()
 
-    try:
-        apps_path.relative_to(project_root)
-    except ValueError:
-        print("❌ Error: Apps directory must be within project root for security")
-        print(f"   Project root: {project_root}")
-        print(f"   Apps path: {apps_path}")
-        sys.exit(1)
+    # Note: No path restrictions - allows documentation of external AppDaemon installations
 
     print(f"📂 Apps directory: {apps_path}")
     print(f"🌐 Server will be available at: http://{os.environ['HOST']}:{os.environ['PORT']}")

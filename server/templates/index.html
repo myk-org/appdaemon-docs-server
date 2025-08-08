@@ -270,6 +270,31 @@
             text-align: center;
             transition: background-color var(--theme-transition);
         }
+        .filter-button {
+            background: none;
+            border: none;
+            color: var(--text-link);
+            cursor: pointer;
+            font-size: inherit;
+            font-family: inherit;
+            text-decoration: none;
+            padding: 2px 4px;
+            border-radius: 3px;
+            transition: all 0.2s ease;
+        }
+        .filter-button:hover {
+            background: var(--bg-card-hover);
+            color: var(--text-link-hover);
+        }
+        .filter-button.active {
+            background: var(--bg-button);
+            color: var(--text-button);
+        }
+        .filter-button.clear-filter {
+            color: var(--text-secondary);
+            margin-left: 8px;
+            text-decoration: underline;
+        }
         .empty-state {
             text-align: center;
             padding: 60px 20px;
@@ -751,6 +776,20 @@
         <div class="view-controls">
             <div class="stats">
                 <strong>{{ total_files }}</strong> documentation files available
+                {% if app_counts %}
+                <br>
+                <span style="color: var(--text-secondary); font-size: 0.9em;">
+                    <button id="filterActive" class="filter-button" data-filter="active" title="Filter by active apps">
+                        {{ app_counts.active }} active
+                    </button>,
+                    <button id="filterInactive" class="filter-button" data-filter="inactive" title="Filter by inactive apps">
+                        {{ app_counts.inactive }} inactive
+                    </button> apps
+                    <button id="clearFilter" class="filter-button clear-filter" data-filter="all" title="Show all apps" style="display: none;">
+                        Clear filter
+                    </button>
+                </span>
+                {% endif %}
             </div>
             <div style="display: flex; gap: 10px; align-items: center;">
                 <button id="regenerateAllBtn" class="regenerate-button" title="Regenerate All Documentation">
@@ -768,7 +807,7 @@
         <!-- Grid View -->
         <div class="file-grid active" id="fileGrid">
             {% for file in files %}
-            <a href="/docs/{{ file.stem }}" class="file-card">
+            <a href="/docs/{{ file.stem }}" class="file-card" data-module="{{ file.stem }}">
                 <div class="file-title">{{ file.title }}</div>
                 <div class="file-name">{{ file.name }}</div>
                 <div class="file-meta">
@@ -781,7 +820,7 @@
         <!-- List View -->
         <div class="file-list" id="fileList">
             {% for file in files %}
-            <a href="/docs/{{ file.stem }}" class="file-list-item">
+            <a href="/docs/{{ file.stem }}" class="file-list-item" data-module="{{ file.stem }}">
                 <div class="file-list-content">
                     <div class="file-list-title">{{ file.title }}</div>
                     <div class="file-list-name">{{ file.name }}</div>
@@ -801,6 +840,61 @@
     </div>
 
     <script>
+        // App filtering data
+        const appCounts = {{ app_counts | tojson | safe }};
+        console.log('App counts:', appCounts);
+
+        // App filtering functionality
+        function filterApps(filterType) {
+            const fileCards = document.querySelectorAll('.file-card, .file-list-item');
+            const filterButtons = document.querySelectorAll('.filter-button');
+            const clearFilterBtn = document.getElementById('clearFilter');
+
+            // Remove active class from all buttons
+            filterButtons.forEach(btn => btn.classList.remove('active'));
+
+            let visibleModules = [];
+
+            if (filterType === 'active') {
+                visibleModules = appCounts.active_modules;
+                document.getElementById('filterActive').classList.add('active');
+            } else if (filterType === 'inactive') {
+                visibleModules = appCounts.inactive_modules;
+                document.getElementById('filterInactive').classList.add('active');
+            } else {
+                visibleModules = appCounts.all_modules;
+            }
+
+            // Show/hide cards based on filter
+            fileCards.forEach(card => {
+                const module = card.getAttribute('data-module');
+                if (filterType === 'all' || visibleModules.includes(module)) {
+                    card.style.display = '';
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+
+            // Show/hide clear filter button
+            if (filterType === 'all') {
+                clearFilterBtn.style.display = 'none';
+            } else {
+                clearFilterBtn.style.display = 'inline-block';
+            }
+
+            // Update stats if needed
+            updateFilterStats(filterType, visibleModules.length);
+        }
+
+        function updateFilterStats(filterType, count) {
+            const statsElement = document.querySelector('.stats strong');
+            if (filterType === 'all') {
+                statsElement.textContent = appCounts.total;
+            } else {
+                statsElement.textContent = count;
+            }
+        }
+
         // WebSocket Real-time Updates
         class DocsWebSocket {
             constructor() {
@@ -1326,6 +1420,31 @@
                     performSearch(query);
                 }, 300); // 300ms debounce
             });
+        });
+
+        // Filter functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            const filterActiveBtn = document.getElementById('filterActive');
+            const filterInactiveBtn = document.getElementById('filterInactive');
+            const clearFilterBtn = document.getElementById('clearFilter');
+
+            if (filterActiveBtn) {
+                filterActiveBtn.addEventListener('click', function() {
+                    filterApps('active');
+                });
+            }
+
+            if (filterInactiveBtn) {
+                filterInactiveBtn.addEventListener('click', function() {
+                    filterApps('inactive');
+                });
+            }
+
+            if (clearFilterBtn) {
+                clearFilterBtn.addEventListener('click', function() {
+                    filterApps('all');
+                });
+            }
         });
     </script>
 </body>
