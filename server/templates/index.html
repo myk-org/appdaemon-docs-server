@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ title }}</title>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" rel="stylesheet">
     <link href="/api/css/pygments.css" rel="stylesheet">
     <style>
         /* CSS Reset and Normalization for Cross-Browser Consistency */
@@ -907,6 +906,7 @@
                 this.statusElement = document.getElementById('websocketStatus');
                 this.progressElement = document.getElementById('progressIndicator');
                 this.notificationContainer = document.getElementById('notificationContainer');
+                this.hasShownConnectToast = sessionStorage.getItem('docs-rt-connected-toast-shown') === '1';
 
                 this.connect();
             }
@@ -923,6 +923,13 @@
                         console.log('WebSocket connected');
                         this.updateStatus('connected', '🟢 Live Updates');
                         this.reconnectAttempts = 0;
+
+                        // Show a single connection toast on the main page once per tab
+                        if (!this.hasShownConnectToast) {
+                            this.showNotification('success', 'Connected', 'Real-time updates are now active');
+                            this.hasShownConnectToast = true;
+                            sessionStorage.setItem('docs-rt-connected-toast-shown', '1');
+                        }
 
                         // Send client info
                         this.send({
@@ -967,7 +974,7 @@
 
                 switch (data.event_type) {
                     case 'connection_established':
-                        this.showNotification('success', 'Connected', 'Real-time updates are now active');
+                        // Connection acknowledged – toast handled on onopen; do nothing here
                         break;
 
                     case 'file_created':
@@ -1021,7 +1028,7 @@
                         break;
 
                     case 'system_status':
-                        if (data.data.type === 'test_broadcast') {
+                        if (data.data && data.data.type === 'test_broadcast') {
                             this.showNotification('info', 'Test Message', data.data.message);
                         }
                         break;
@@ -1061,14 +1068,19 @@
                 if (!progressData) return;
 
                 const { current, total, percentage, current_file, stage, message } = progressData;
+                const pct = (typeof percentage !== 'undefined' && percentage !== null)
+                  ? percentage
+                  : (typeof progressData.progress_percentage !== 'undefined' && progressData.progress_percentage !== null
+                      ? progressData.progress_percentage
+                      : 0);
 
                 // Update progress bar
                 const progressFill = document.getElementById('progressFill');
                 const progressText = document.getElementById('progressText');
                 const progressTitle = document.getElementById('progressTitle');
 
-                if (progressFill) progressFill.style.width = `${percentage || 0}%`;
-                if (progressText) progressText.textContent = `${percentage || 0}%`;
+                if (progressFill) progressFill.style.width = `${pct}%`;
+                if (progressText) progressText.textContent = `${pct}%`;
                 if (progressTitle) {
                     if (current_file) {
                         progressTitle.textContent = `${stage || 'Processing'}: ${current_file}`;
@@ -1113,7 +1125,6 @@
 
             async refreshFileList() {
                 try {
-                    // Only refresh if we're on the index page
                     if (window.location.pathname !== '/docs/' && window.location.pathname !== '/') {
                         return;
                     }
@@ -1121,18 +1132,55 @@
                     const response = await fetch('/api/files');
                     const data = await response.json();
 
-                    if (data.files) {
-                        // Update file count
-                        const statsElement = document.querySelector('.stats');
-                        if (statsElement) {
-                            statsElement.innerHTML = `<strong>${data.total_count}</strong> documentation files available`;
-                        }
+                    if (!data.files) return;
 
-                        // Regenerate file grids/lists would require more complex logic
-                        // For now, we'll show a notification suggesting page refresh
-                        if (data.total_count !== parseInt(document.querySelector('.stats strong')?.textContent || '0')) {
-                            this.showNotification('info', 'Files Updated', 'Documentation list has changed. Refresh the page to see updates.');
-                        }
+                    // Update stats count
+                    const statsElement = document.querySelector('.stats strong');
+                    if (statsElement) statsElement.textContent = String(data.total_count);
+
+                    // Update grid
+                    const grid = document.getElementById('fileGrid');
+                    const list = document.getElementById('fileList');
+                    const buildCard = (file) => {
+                        const a = document.createElement('a');
+                        a.href = `/docs/${file.stem}`;
+                        a.className = 'file-card';
+                        a.dataset.module = file.stem;
+                        a.innerHTML = `
+                            <div class="file-title">${file.title}</div>
+                            <div class="file-name">${file.name}</div>
+                            <div class="file-meta">Size: ${(file.size/1024).toFixed(1)} KB</div>
+                        `;
+                        return a;
+                    };
+                    const buildListItem = (file) => {
+                        const a = document.createElement('a');
+                        a.href = `/docs/${file.stem}`;
+                        a.className = 'file-list-item';
+                        a.dataset.module = file.stem;
+                        a.innerHTML = `
+                            <div class="file-list-content">
+                                <div class="file-list-title">${file.title}</div>
+                                <div class="file-list-name">${file.name}</div>
+                            </div>
+                            <div class="file-list-meta">${(file.size/1024).toFixed(1)} KB</div>
+                        `;
+                        return a;
+                    };
+
+                    if (grid) {
+                        grid.innerHTML = '';
+                        data.files.forEach(f => grid.appendChild(buildCard(f)));
+                    }
+                    if (list) {
+                        list.innerHTML = '';
+                        data.files.forEach(f => list.appendChild(buildListItem(f)));
+                    }
+
+                    // Reapply current filter if any
+                    const activeFilter = document.querySelector('.filter-button.active');
+                    if (activeFilter) {
+                        filterApps(activeFilter.dataset.filter);
                     }
                 } catch (error) {
                     console.error('Error refreshing file list:', error);

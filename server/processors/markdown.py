@@ -1,6 +1,7 @@
 """Markdown processor for rendering documentation with caching."""
 
 import logging
+import threading
 
 import markdown
 
@@ -43,6 +44,8 @@ class MarkdownProcessor:
         self._max_cache_size = 128
         # Track access order for true LRU eviction
         self._access_order: list[tuple[str, int]] = []
+        # Synchronization for thread-safe processing and cache access
+        self._lock = threading.Lock()
 
     def process_file(self, file_path: str, content_hash: int) -> str:
         """
@@ -57,31 +60,41 @@ class MarkdownProcessor:
         """
         cache_key = (file_path, content_hash)
 
-        # Check cache first
-        if cache_key in self._cache:
-            # Update access order for LRU
-            self._access_order.remove(cache_key)
-            self._access_order.append(cache_key)
-            return self._cache[cache_key]
-
         try:
+            with self._lock:
+                # Check cache first
+                if cache_key in self._cache:
+                    # Update access order for LRU
+                    if cache_key in self._access_order:
+                        self._access_order.remove(cache_key)
+                    self._access_order.append(cache_key)
+                    return self._cache[cache_key]
+
+            # Read and render outside of lock for I/O, but protect the shared Markdown instance
             with open(file_path, encoding="utf-8") as f:
                 content = f.read()
 
-            # Reset markdown instance for clean processing
-            self.md.reset()
-            html_content = str(self.md.convert(content))
+            with self._lock:
+                # Reset markdown instance for clean processing
+                self.md.reset()
+                html_content = str(self.md.convert(content))
 
-            # Cache the result with true LRU eviction
-            if len(self._cache) >= self._max_cache_size:
-                # Remove least recently used entry (true LRU)
-                lru_key = self._access_order.pop(0)
-                del self._cache[lru_key]
+                # Cache the result with true LRU eviction
+                if len(self._cache) >= self._max_cache_size and self._access_order:
+                    # Remove least recently used entry (true LRU)
+                    lru_key = self._access_order.pop(0)
+                    self._cache.pop(lru_key, None)
 
-            self._cache[cache_key] = html_content
-            self._access_order.append(cache_key)
-            return html_content
+                self._cache[cache_key] = html_content
+                self._access_order.append(cache_key)
+                return html_content
 
         except Exception as e:
             logger.error(f"Error processing markdown file {file_path}: {e}")
             raise
+
+    def clear_cache(self) -> None:
+        """Clear the internal render cache safely."""
+        with self._lock:
+            self._cache.clear()
+            self._access_order.clear()

@@ -5,6 +5,7 @@ This module provides a command-line interface and batch processing capabilities
 for generating documentation for multiple AppDaemon automation files at once.
 """
 
+import os
 from pathlib import Path
 from typing import Any, Callable
 
@@ -51,14 +52,18 @@ class BatchDocGenerator:
             self._apps_yaml_path = apps_yaml_candidate if apps_yaml_candidate.exists() else None
         return self._apps_yaml_path
 
-    def find_automation_files(self) -> list[Path]:
+    def find_automation_files(self, recursive: bool | None = None) -> list[Path]:
         """
         Find all AppDaemon automation Python files.
 
         Returns:
             List of Python file paths in the apps directory
         """
-        python_files = list(self.apps_dir.glob("*.py"))
+        # Allow recursive search via environment toggle or parameter
+        if recursive is None:
+            recursive = os.getenv("RECURSIVE_SCAN", "false").lower() in ("true", "1", "yes", "on")
+
+        python_files = list(self.apps_dir.rglob("*.py")) if recursive else list(self.apps_dir.glob("*.py"))
 
         # Filter out common non-automation files
         excluded_files = {

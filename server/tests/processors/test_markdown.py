@@ -36,7 +36,7 @@ class TestMarkdownProcessor:
         assert processor._max_cache_size == 128
         assert processor._access_order == []
 
-    def test_process_file_basic(self, processor, temp_markdown_file):
+    def test_process_file_happy_path(self, processor, temp_markdown_file):
         """Test basic markdown file processing."""
         result = processor.process_file(temp_markdown_file, 123)
 

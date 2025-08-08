@@ -14,6 +14,7 @@ from enum import Enum
 from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
+import asyncio
 
 
 class EventType(Enum):
@@ -40,6 +41,8 @@ class EventType(Enum):
     SYSTEM_STATUS = "system_status"
     WATCHER_STATUS = "watcher_status"
     SERVER_STATUS = "server_status"
+    # Connection lifecycle
+    CONNECTION_ESTABLISHED = "connection_established"
 
 
 @dataclass
@@ -97,6 +100,9 @@ class WebSocketManager:
             "broadcast_errors": 0,
         }
 
+        # SSE broker for Server-Sent Events subscribers
+        self._sse_broker = SSEBroker()
+
     async def connect(self, websocket: WebSocket) -> None:
         """
         Accept a new WebSocket connection.
@@ -123,6 +129,17 @@ class WebSocketManager:
                 },
             )
             await self._send_to_client(websocket, welcome_event)
+
+            # Also emit a dedicated connection-established event for clients that expect it
+            connection_event = WebSocketEvent(
+                event_type=EventType.CONNECTION_ESTABLISHED,
+                data={
+                    "message": "Connection established",
+                    "connection_id": self._connection_count,
+                    "active_connections": len(self._connections),
+                },
+            )
+            await self._send_to_client(websocket, connection_event)
 
         except Exception as e:
             self.logger.error(f"Error accepting WebSocket connection: {e}")
@@ -229,6 +246,12 @@ class WebSocketManager:
             self.stats["events_sent"] += successful_sends
             self.logger.debug(f"Broadcast event {event.event_type.value} to {successful_sends} clients")
 
+        # Also publish to SSE subscribers regardless of WebSocket clients
+        try:
+            await self._sse_broker.publish(event.to_dict())
+        except Exception as e:
+            self.logger.warning(f"Failed to publish event to SSE broker: {e}")
+
         return successful_sends
 
     async def _send_to_client(self, websocket: WebSocket, event: WebSocketEvent) -> None:
@@ -285,6 +308,9 @@ class WebSocketManager:
         Returns:
             Number of clients notified
         """
+        # Compute percentage once and provide under both keys for compatibility
+        percentage = (current / total * 100) if total > 0 else 0
+
         event = WebSocketEvent(
             event_type=EventType.DOC_GENERATION_PROGRESS,
             data={
@@ -292,7 +318,8 @@ class WebSocketManager:
                 "total": total,
                 "current_file": current_file,
                 "stage": stage,
-                "progress_percentage": (current / total * 100) if total > 0 else 0,
+                "percentage": percentage,
+                "progress_percentage": percentage,
             },
         )
         return await self.broadcast(event)
@@ -337,6 +364,41 @@ class WebSocketManager:
         """Get comprehensive statistics."""
         self.stats["current_connections"] = len(self._connections)
         return self.stats.copy()
+
+    # SSE integration API for external modules
+    def get_sse_broker(self) -> "SSEBroker":
+        return self._sse_broker
+
+
+class SSEBroker:
+    """Simple broker to fan-out server events to SSE subscribers."""
+
+    def __init__(self) -> None:
+        self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
+        self._lock = asyncio.Lock()
+
+    async def subscribe(self) -> asyncio.Queue[dict[str, Any]]:
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=100)
+        async with self._lock:
+            self._subscribers.add(queue)
+        return queue
+
+    async def unsubscribe(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
+        async with self._lock:
+            self._subscribers.discard(queue)
+
+    async def publish(self, event: dict[str, Any]) -> None:
+        async with self._lock:
+            subscribers = list(self._subscribers)
+        for q in subscribers:
+            try:
+                # Drop oldest if full to avoid blocking
+                if q.full():
+                    _ = q.get_nowait()
+                q.put_nowait(event)
+            except Exception:
+                # Ignore individual subscriber errors
+                pass
 
 
 # Global WebSocket manager instance

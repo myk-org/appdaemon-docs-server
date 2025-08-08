@@ -12,14 +12,21 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+import html
+import time
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect, Query
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from fastapi_mcp import FastApiMCP
 from pygments.formatters import HtmlFormatter
+from pygments import highlight
+from pygments.lexers import PythonLexer
+import json
+from pydantic import BaseModel
+from starlette.middleware.gzip import GZipMiddleware
 
 from server.generators.batch_doc_generator import BatchDocGenerator
 from server.processors.markdown import MarkdownProcessor
@@ -58,6 +65,7 @@ if not APPS_DIR_FROM_ENV:
 
 APPS_DIR = Path(APPS_DIR_FROM_ENV).resolve()
 DOCS_DIR = Path(os.getenv("DOCS_DIR", "data/generated-docs")).resolve()
+APP_SOURCES_DIR = Path(os.getenv("APP_SOURCES_DIR", "data/app-sources")).resolve()
 TEMPLATES_DIR = Path(os.getenv("TEMPLATES_DIR", "server/templates")).resolve()
 STATIC_DIR = Path(os.getenv("STATIC_DIR", "server/static")).resolve()
 
@@ -273,6 +281,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # Initialize directories and check status
         logger.info("📁 Initializing directories...")
         DOCS_DIR.mkdir(parents=True, exist_ok=True)
+        APP_SOURCES_DIR.mkdir(parents=True, exist_ok=True)
 
         # Get directory status and configuration
         dir_status = DirectoryStatus(APPS_DIR, DOCS_DIR)
@@ -285,6 +294,42 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             startup_errors.append(error_msg)
         else:
             logger.info(f"Found {dir_status.apps_count} automation files to process")
+
+        # Copy AppDaemon source files for read-only viewing
+        try:
+            excluded_files = {
+                "const.py",
+                "infra.py",
+                "utils.py",
+                "__init__.py",
+                "apps.py",
+                "configuration.py",
+                "secrets.py",
+            }
+            copied = 0
+            for src in APPS_DIR.rglob("*.py"):
+                if src.name in excluded_files:
+                    continue
+                # Preserve relative structure
+                try:
+                    rel = src.relative_to(APPS_DIR)
+                except ValueError:
+                    # If outside APPS_DIR (shouldn't happen), flatten
+                    rel = Path(src.name)
+                dest = APP_SOURCES_DIR / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                # Copy if new or modified
+                try:
+                    import shutil
+
+                    if not dest.exists() or src.stat().st_mtime > dest.stat().st_mtime:
+                        shutil.copy2(src, dest)
+                        copied += 1
+                except Exception as ce:
+                    logger.debug(f"Skip copying {src}: {ce}")
+            logger.info(f"📄 Prepared {copied} AppDaemon source file(s) for read-only viewing")
+        except Exception as copy_err:
+            logger.warning(f"Failed to prepare app sources for viewing: {copy_err}")
 
         # Run initial documentation generation
         startup_generation_completed = await run_initial_documentation_generation(dir_status, config)
@@ -320,7 +365,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             pending_tasks.clear()
 
         # Clear markdown processor cache
-        markdown_processor._cache.clear()
+        try:
+            markdown_processor.clear_cache()
+        except Exception:
+            # Fallback for backward compatibility
+            markdown_processor._cache.clear()
 
         # Broadcast shutdown event
         await websocket_manager.broadcast_batch_status(
@@ -345,6 +394,88 @@ app = FastAPI(
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
+# Add GZip compression for large responses
+app.add_middleware(GZipMiddleware, minimum_size=500)
+
+
+# Basic security headers middleware (CSP allows CDN and inline for current templates)
+@app.middleware("http")  # type: ignore[misc]
+async def add_security_headers(request: Request, call_next: Any) -> Response:
+    response: Response = await call_next(request)
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self' https:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; "
+        "style-src 'self' 'unsafe-inline' https:; img-src 'self' data: https:; connect-src 'self'",
+    )
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    return response
+
+
+# ----------------------
+# Response Models
+# ----------------------
+
+
+class FileInfo(BaseModel):  # type: ignore[misc]
+    name: str
+    stem: str
+    size: int
+    modified: int
+    title: str
+
+
+class FilesResponse(BaseModel):  # type: ignore[misc]
+    files: list[FileInfo]
+    total_count: int
+    docs_available: bool
+    docs_directory: str
+    limit: int | None = None
+    offset: int | None = None
+
+
+class HealthResponse(BaseModel):  # type: ignore[misc]
+    status: str
+    service: str
+    version: str
+    docs_directory_exists: bool
+    apps_directory_exists: bool
+    docs_files_count: int
+    startup_generation_completed: bool
+    file_watcher_active: bool
+    startup_errors_count: int
+    startup_errors: list[str]
+    uptime: str
+    uptime_seconds: float
+
+
+class FileContentResponse(BaseModel):  # type: ignore[misc]
+    filename: str
+    title: str
+    content: str
+    type: str
+
+
+class AppSourceInfo(BaseModel):  # type: ignore[misc]
+    module: str
+    rel_path: str
+    abs_path: str
+    size: int
+    modified: float
+
+
+class AppSourceListResponse(BaseModel):  # type: ignore[misc]
+    apps: list[AppSourceInfo]
+    total_count: int
+
+
+class AppSourceContentResponse(BaseModel):  # type: ignore[misc]
+    module: str
+    rel_path: str
+    abs_path: str
+    content: str
+
 
 # API Routes with proper error handling and response models
 
@@ -355,8 +486,8 @@ async def root() -> RedirectResponse:
     return RedirectResponse(url="/docs/", status_code=307)
 
 
-@app.get("/health", operation_id="health")  # type: ignore[misc]
-async def health_check() -> dict[str, str | bool | int | list[str]]:
+@app.get("/health", operation_id="health", response_model=HealthResponse)  # type: ignore[misc]
+async def health_check() -> HealthResponse:
     """
     Health check endpoint for monitoring server status.
 
@@ -382,23 +513,26 @@ async def health_check() -> dict[str, str | bool | int | list[str]]:
     elif not startup_generation_completed and apps_exists:
         status = "starting"
 
-    return {
-        "status": status,
-        "service": "appdaemon-docs-server",
-        "version": APP_VERSION,
-        "docs_directory_exists": docs_exists,
-        "apps_directory_exists": apps_exists,
-        "docs_files_count": docs_count,
-        "startup_generation_completed": startup_generation_completed,
-        "file_watcher_active": file_watcher is not None and file_watcher.is_watching,
-        "startup_errors_count": len(startup_errors),
-        "startup_errors": startup_errors,
-        "uptime": "running",
-    }
+    return HealthResponse(
+        status=status,
+        service="appdaemon-docs-server",
+        version=APP_VERSION,
+        docs_directory_exists=docs_exists,
+        apps_directory_exists=apps_exists,
+        docs_files_count=docs_count,
+        startup_generation_completed=startup_generation_completed,
+        file_watcher_active=file_watcher is not None and file_watcher.is_watching,
+        startup_errors_count=len(startup_errors),
+        startup_errors=startup_errors,
+        uptime="running",
+        uptime_seconds=time.time(),
+    )
 
 
 @app.get("/api/files", operation_id="list_files")  # type: ignore[misc]
-async def list_documentation_files() -> dict[str, list[dict[str, Any]] | int | bool | str]:
+async def list_documentation_files(
+    limit: int | None = Query(None, ge=1), offset: int | None = Query(None, ge=0)
+) -> dict[str, Any]:
     """
     List all available documentation files with metadata.
 
@@ -407,19 +541,27 @@ async def list_documentation_files() -> dict[str, list[dict[str, Any]] | int | b
     """
     try:
         files = await docs_service.get_file_list()
+        total = len(files)
+        if offset is not None or limit is not None:
+            start = offset or 0
+            end = start + (limit or total)
+            files = files[start:end]
+
         return {
             "files": files,
-            "total_count": len(files),
+            "total_count": total,
             "docs_available": DOCS_DIR.exists(),
             "docs_directory": str(DOCS_DIR),
+            "limit": limit,
+            "offset": offset,
         }
     except Exception as e:
         logger.error(f"Error listing files: {e}")
         raise HTTPException(status_code=500, detail="Error listing documentation files") from e
 
 
-@app.get("/api/file/{filename}", operation_id="get_file")  # type: ignore[misc]
-async def get_file_content(filename: str) -> dict[str, str]:
+@app.get("/api/file/{filename}", operation_id="get_file", response_model=FileContentResponse)  # type: ignore[misc]
+async def get_file_content(filename: str) -> FileContentResponse:
     """
     Get processed content for a specific documentation file.
 
@@ -431,12 +573,102 @@ async def get_file_content(filename: str) -> dict[str, str]:
     """
     try:
         html_content, title = await docs_service.get_file_content(filename)
-        return {"filename": filename, "title": title, "content": html_content, "type": "markdown"}
+        return FileContentResponse(filename=filename, title=title, content=html_content, type="markdown")
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error getting file content for {filename}: {e}")
         raise HTTPException(status_code=500, detail="Error processing file content") from e
+
+
+@app.get("/api/app-source/{module}", operation_id="get_app_source")  # type: ignore[misc]
+async def get_app_source(module: str, fmt: str = Query("text"), theme: str = Query("light")) -> Response:
+    """
+    Return the read-only Python source file for a given module name (stem).
+
+    Args:
+        module: The module stem (without .py)
+
+    Returns:
+        Plain text response with the source code
+    """
+    try:
+        safe_module = module.replace("..", "").replace("/", "").replace("\\", "")
+        source_path = None
+        # Search for matching file in APP_SOURCES_DIR
+        candidates = list(APP_SOURCES_DIR.rglob(f"{safe_module}.py"))
+        if candidates:
+            # Prefer root-level match; else pick first
+            candidates.sort(key=lambda p: len(p.parts))
+            source_path = candidates[0]
+        if source_path is None or not source_path.exists():
+            raise HTTPException(status_code=404, detail=f"Source for '{module}' not found")
+
+        with open(source_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        if fmt == "html":
+            style_name = "default" if theme != "dark" else "monokai"
+            container_id = "app-source-viewer"
+            formatter = HtmlFormatter(noclasses=False, style=style_name)
+            # Scope style to this viewer only
+            scoped_css = formatter.get_style_defs(f"#{container_id} .highlight")
+            highlighted = highlight(content, PythonLexer(), formatter)
+            html = f'<style>{scoped_css}</style><div id="{container_id}">{highlighted}</div>'
+            return HTMLResponse(content=html)
+
+        return Response(content=content, media_type="text/plain; charset=utf-8")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error reading app source for {module}: {e}")
+        raise HTTPException(status_code=500, detail="Error reading app source") from e
+
+
+@app.get("/api/app-sources", operation_id="list_app_sources", response_model=AppSourceListResponse)  # type: ignore[misc]
+async def list_app_sources() -> AppSourceListResponse:
+    """List mirrored AppDaemon source files available for AI analysis."""
+    apps: list[AppSourceInfo] = []
+    try:
+        if APP_SOURCES_DIR.exists():
+            for py in APP_SOURCES_DIR.rglob("*.py"):
+                rel = str(py.relative_to(APP_SOURCES_DIR))
+                apps.append(
+                    AppSourceInfo(
+                        module=py.stem,
+                        rel_path=rel,
+                        abs_path=str(py.resolve()),
+                        size=py.stat().st_size,
+                        modified=py.stat().st_mtime,
+                    )
+                )
+    except Exception as e:
+        logger.warning(f"Error listing app sources: {e}")
+    return AppSourceListResponse(apps=apps, total_count=len(apps))
+
+
+@app.get("/api/app-source/raw/{module}", operation_id="get_app_source_raw", response_model=AppSourceContentResponse)  # type: ignore[misc]
+async def get_app_source_raw(module: str) -> AppSourceContentResponse:
+    """Return raw app source content for AI/MCP consumption."""
+    try:
+        safe_module = module.replace("..", "").replace("/", "").replace("\\", "")
+        candidates = list(APP_SOURCES_DIR.rglob(f"{safe_module}.py"))
+        if not candidates:
+            raise HTTPException(status_code=404, detail=f"Source for '{module}' not found")
+        candidates.sort(key=lambda p: len(p.parts))
+        source_path = candidates[0]
+        content = source_path.read_text(encoding="utf-8")
+        return AppSourceContentResponse(
+            module=safe_module,
+            rel_path=str(source_path.relative_to(APP_SOURCES_DIR)),
+            abs_path=str(source_path.resolve()),
+            content=content,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error reading app source (raw) for {module}: {e}")
+        raise HTTPException(status_code=500, detail="Error reading app source") from e
 
 
 @app.get("/docs/", response_class=HTMLResponse)  # type: ignore[misc]
@@ -458,9 +690,9 @@ async def documentation_index(request: Request) -> HTMLResponse:
         app_counts = count_active_apps(APPS_DIR, doc_stems=doc_stems)
 
         return templates.TemplateResponse(
+            request,
             "index.html",
             {
-                "request": request,
                 "title": "AppDaemon Documentation",
                 "files": files,
                 "total_files": len(files),
@@ -488,9 +720,9 @@ async def documentation_file(request: Request, filename: str) -> HTMLResponse:
         html_content, title = await docs_service.get_file_content(filename)
 
         return templates.TemplateResponse(
+            request,
             "document.html",
             {
-                "request": request,
                 "title": title,
                 "content": html_content,
                 "filename": filename,
@@ -547,9 +779,11 @@ async def search_documentation(q: str = "") -> dict[str, list[dict[str, Any]] | 
                         if start_pos != -1:
                             context_start = max(0, start_pos - 100)
                             context_end = min(len(content), start_pos + len(query) + 100)
-                            context = content[context_start:context_end].strip()
-                            # Highlight the search term
-                            context = context.replace(query, f"**{query}**")
+                            raw = content[context_start:context_end].strip()
+                            # Escape HTML to prevent injection in UI, then highlight query
+                            escaped = html.escape(raw)
+                            # Highlight the search term (case-insensitive match on escaped text is tricky; use original query lower)
+                            context = escaped.replace(html.escape(query), f"<mark>{html.escape(query)}</mark>")
 
                     title = await docs_service.extract_title(file_path)
 
@@ -634,6 +868,51 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         logger.error(f"WebSocket error: {e}")
     finally:
         await websocket_manager.disconnect(websocket)
+
+
+@app.get("/sse", include_in_schema=False)  # type: ignore[misc]
+async def sse_endpoint() -> StreamingResponse:
+    """
+    Server-Sent Events endpoint streaming the same events as WebSocket.
+    Useful for simpler clients or proxies.
+    """
+    broker = websocket_manager.get_sse_broker()
+    queue = await broker.subscribe()
+
+    async def event_stream() -> AsyncGenerator[bytes, None]:
+        try:
+            # Initial hello
+            yield b"event: system_status\n"
+            yield b'data: {"message": "SSE connected"}\n\n'
+
+            while True:
+                event = await queue.get()
+                data = json.dumps(event).encode()
+                # Optional: include event name
+                yield b"event: " + event.get("event_type", "message").encode() + b"\n"
+                yield b"data: " + data + b"\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await broker.unsubscribe(queue)
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "Content-Type": "text/event-stream",
+    }
+    return StreamingResponse(event_stream(), headers=headers, media_type="text/event-stream")
+
+
+@app.head("/sse", include_in_schema=False)  # type: ignore[misc]
+async def sse_head() -> Response:
+    """HEAD for SSE to allow header validation without opening a stream."""
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "Content-Type": "text/event-stream",
+    }
+    return Response(status_code=200, headers=headers, media_type="text/event-stream")
 
 
 @app.get("/api/ws/status", operation_id="ws_status")  # type: ignore[misc]
@@ -832,6 +1111,29 @@ async def trigger_single_file_generation(filename: str, force: bool = False) -> 
         raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}") from e
 
 
+@app.post("/api/generate/index", operation_id="generate_index")  # type: ignore[misc]
+async def regenerate_index() -> dict[str, Any]:
+    """
+    Regenerate only the index file from current automation files.
+    """
+    try:
+        batch_generator = BatchDocGenerator(APPS_DIR, DOCS_DIR)
+        index_content = batch_generator.generate_index_file()
+        index_path = DOCS_DIR / "README.md"
+        index_path.write_text(index_content, encoding="utf-8")
+
+        await websocket_manager.broadcast_batch_status(
+            EventType.BATCH_COMPLETED, "Index file regenerated", {"index_path": str(index_path)}
+        )
+
+        return {"success": True, "message": "Index regenerated", "index_path": str(index_path)}
+    except Exception as e:
+        await websocket_manager.broadcast_batch_status(
+            EventType.BATCH_ERROR, f"Failed to regenerate index: {str(e)}", {"error": str(e)}
+        )
+        raise HTTPException(status_code=500, detail="Failed to regenerate index") from e
+
+
 @app.post("/api/ws/broadcast", operation_id="broadcast_test")  # type: ignore[misc]
 async def broadcast_test_message(message: str = "Test message") -> dict[str, Any]:
     """
@@ -900,7 +1202,7 @@ def main() -> None:
 
     # Create uvicorn configuration
     config = uvicorn.Config(
-        "main:app",
+        "server.main:app",
         host=server_config["host"],
         port=server_config["port"],
         reload=server_config["reload"],

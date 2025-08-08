@@ -60,7 +60,7 @@ class TestAppDaemonDocGenerator:
         assert generator_with_docs_dir.docs_dir == Path(tmp_path)
         assert generator_with_docs_dir.constants_map is not None
 
-    def test_generate_documentation_basic(self, generator, sample_parsed_file):
+    def test_generate_documentation_simple_case(self, generator, sample_parsed_file):
         """Test basic documentation generation."""
         with patch.object(generator, "_load_constants_map", return_value={}):
             result = generator.generate_documentation(sample_parsed_file)
@@ -200,10 +200,7 @@ class TestAppDaemonDocGenerator:
             assert "## TestAutomation" in result  # Main heading, not sub-heading
             assert "Test automation class for testing purposes." in result
 
-    def test_generate_imports_section(self, generator, sample_parsed_file):
-        """Test imports section generation."""
-        # This method doesn't exist in current implementation, skip this test
-        pytest.skip("_generate_imports_section method not implemented")
+    # Removed: imports section test placeholder for non-existent method
 
     def test_get_initialization_details(self, generator, sample_parsed_file):
         """Test initialization details generation."""

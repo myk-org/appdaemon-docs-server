@@ -609,12 +609,15 @@
             <div class="breadcrumb">
                 <a href="/docs/">📚 Documentation</a> / {{ filename }}
             </div>
-            <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px;">
                 <h1>{{ title }}</h1>
-                <button id="regenerateDocBtn" class="regenerate-button" title="Regenerate This Document">
-                    <div class="spinner"></div>
-                    🔄 Regenerate
-                </button>
+                <div style="display: inline-flex; gap: 8px; align-items: center;">
+                    <button id="viewSourceBtn" class="regenerate-button" title="View App Source (read-only)">📄 View Source</button>
+                    <button id="regenerateDocBtn" class="regenerate-button" title="Regenerate This Document">
+                        <div class="spinner"></div>
+                        🔄 Regenerate
+                    </button>
+                </div>
             </div>
         </div>
 
@@ -708,7 +711,7 @@
 
                 switch (data.event_type) {
                     case 'connection_established':
-                        this.showNotification('success', 'Connected', 'Real-time updates are now active');
+                        // Suppress repeated connection toasts on document pages
                         break;
 
                     case 'file_created':
@@ -752,7 +755,7 @@
                         break;
 
                     case 'system_status':
-                        if (data.data.type === 'test_broadcast') {
+                        if (data.data && data.data.type === 'test_broadcast') {
                             this.showNotification('info', 'Test Message', data.data.message);
                         }
                         break;
@@ -883,6 +886,7 @@
         document.addEventListener('DOMContentLoaded', function() {
             const regenerateDocBtn = document.getElementById('regenerateDocBtn');
             const currentDocument = document.documentElement.getAttribute('data-filename');
+            const viewSourceBtn = document.getElementById('viewSourceBtn');
 
             regenerateDocBtn.addEventListener('click', async function() {
                 if (regenerateDocBtn.classList.contains('processing')) {
@@ -936,6 +940,77 @@
                     regenerateDocBtn.innerHTML = '<div class="spinner"></div>🔄 Regenerate';
                 }
             });
+
+            // View Source (read-only) - fetch and show in modal
+            if (viewSourceBtn) {
+                viewSourceBtn.addEventListener('click', async function() {
+                    try {
+                        const stem = (currentDocument || '').replace(/\.md$/i, '');
+                        const currentTheme = document.body.getAttribute('data-theme') || 'light';
+                        const resp = await fetch(`/api/app-source/${encodeURIComponent(stem)}?fmt=html&theme=${encodeURIComponent(currentTheme)}`);
+                        if (!resp.ok) {
+                            throw new Error(`Server responded with ${resp.status}`);
+                        }
+                        const html = await resp.text();
+
+                        // Create a simple modal to display code read-only
+                        const overlay = document.createElement('div');
+                        overlay.style.position = 'fixed';
+                        overlay.style.top = '0';
+                        overlay.style.left = '0';
+                        overlay.style.right = '0';
+                        overlay.style.bottom = '0';
+                        overlay.style.background = 'rgba(0,0,0,0.5)';
+                        overlay.style.zIndex = '2000';
+                        overlay.addEventListener('click', () => document.body.removeChild(overlay));
+
+                        const modal = document.createElement('div');
+                        modal.style.position = 'absolute';
+                        modal.style.top = '50%';
+                        modal.style.left = '50%';
+                        modal.style.transform = 'translate(-50%, -50%)';
+                        modal.style.background = 'var(--bg-secondary)';
+                        modal.style.border = '1px solid var(--border-primary)';
+                        modal.style.borderRadius = '8px';
+                        modal.style.width = '80%';
+                        modal.style.maxWidth = '1000px';
+                        modal.style.maxHeight = '80%';
+                        modal.style.overflow = 'auto';
+                        modal.style.boxShadow = '0 10px 30px rgba(0,0,0,0.3)';
+
+                        const header = document.createElement('div');
+                        header.style.display = 'flex';
+                        header.style.justifyContent = 'space-between';
+                        header.style.alignItems = 'center';
+                        header.style.padding = '12px 16px';
+                        header.style.borderBottom = '1px solid var(--border-primary)';
+                        header.innerHTML = `<strong>Source: ${stem}.py</strong>`;
+
+                        const closeBtn = document.createElement('button');
+                        closeBtn.textContent = '✖';
+                        closeBtn.style.background = 'none';
+                        closeBtn.style.border = 'none';
+                        closeBtn.style.cursor = 'pointer';
+                        closeBtn.addEventListener('click', () => document.body.removeChild(overlay));
+                        header.appendChild(closeBtn);
+
+                        const codeContainer = document.createElement('div');
+                        codeContainer.style.margin = '0';
+                        codeContainer.style.padding = '0';
+                        codeContainer.innerHTML = html;
+
+                        modal.appendChild(header);
+                        modal.appendChild(codeContainer);
+                        overlay.appendChild(modal);
+                        document.body.appendChild(overlay);
+                    } catch (e) {
+                        console.error('Failed to load source:', e);
+                        if (documentWebSocket) {
+                            documentWebSocket.showNotification('error', 'View Source Failed', 'Could not load source code.');
+                        }
+                    }
+                });
+            }
         });
 
         // Clean up on page unload

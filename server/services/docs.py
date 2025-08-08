@@ -59,7 +59,10 @@ class DocumentationService:
                 continue
 
         # Sort by name for consistent ordering
-        return sorted(files, key=lambda x: str(x["name"]))
+        # Sort case-insensitively by name for consistent ordering
+        # Filter out the generated index from listings for UX (still accessible directly)
+        files = [f for f in files if f.get("name") != "README.md"]
+        return sorted(files, key=lambda x: str(x["name"]).lower())
 
     async def extract_title(self, file_path: Path) -> str:
         """

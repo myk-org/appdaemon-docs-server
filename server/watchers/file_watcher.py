@@ -10,6 +10,7 @@ import asyncio
 import logging
 import os
 import time
+import shutil
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -174,7 +175,8 @@ class FileWatchEventHandler(FileSystemEventHandler):  # type: ignore[misc]
             file_path = Path(event.src_path)
 
             # Broadcast WebSocket event for all file changes (not just processed ones)
-            asyncio.create_task(self._broadcast_file_change(file_path, event_type))
+            if self.watcher.loop:
+                asyncio.run_coroutine_threadsafe(self._broadcast_file_change(file_path, event_type), self.watcher.loop)
 
             # Check if file should be processed
             if self.watcher._should_process_file(file_path):
@@ -183,7 +185,10 @@ class FileWatchEventHandler(FileSystemEventHandler):  # type: ignore[misc]
                 self.logger.debug(f"File {event_type}: {file_path}")
 
                 # Schedule debounced processing
-                asyncio.create_task(self.watcher._schedule_debounced_processing(file_event))
+                if self.watcher.loop:
+                    asyncio.run_coroutine_threadsafe(
+                        self.watcher._schedule_debounced_processing(file_event), self.watcher.loop
+                    )
 
         except Exception as e:
             self.logger.error(f"Error handling file event: {e}")
@@ -250,6 +255,7 @@ class FileWatcher:
         self.debounce_handler = DebounceHandler(self.config.debounce_delay)
         self._processing_queue: asyncio.Queue[FileEvent] = asyncio.Queue()
         self._processing_task: asyncio.Task[None] | None = None
+        self.loop: asyncio.AbstractEventLoop | None = None
 
         # Status tracking
         self.is_watching = False
@@ -340,8 +346,12 @@ class FileWatcher:
         self.stats["total_events"] += 1
 
         try:
-            # Use asyncio.create_task to schedule the coroutine
-            asyncio.create_task(self._processing_queue.put(event))
+            if self.loop is not None:
+                asyncio.run_coroutine_threadsafe(self._processing_queue.put(event), self.loop)
+            else:
+                # Attempt to schedule on current running loop if available
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._processing_queue.put(event))
         except RuntimeError:
             # If no event loop is running, we'll handle this gracefully
             self.logger.warning("No event loop running, event will be processed when watcher starts")
@@ -364,6 +374,31 @@ class FileWatcher:
         """Process a single file event with retry logic."""
         file_path = event.file_path
         max_retries = self.config.max_retry_attempts
+
+        # Opportunistically sync source .py file for read-only viewing on create/modify
+        try:
+            if file_path.suffix == ".py" and event.event_type in {"created", "modified", "moved"}:
+                dest_base = Path(os.getenv("APP_SOURCES_DIR", "data/app-sources")).resolve()
+                excluded = {
+                    "const.py",
+                    "infra.py",
+                    "utils.py",
+                    "__init__.py",
+                    "apps.py",
+                    "configuration.py",
+                    "secrets.py",
+                }
+                if file_path.name not in excluded and file_path.exists():
+                    try:
+                        rel = file_path.relative_to(self.config.watch_directory)
+                    except ValueError:
+                        rel = Path(file_path.name)
+                    dest = dest_base / rel
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(file_path, dest)
+        except Exception as sync_err:
+            # Do not fail the main processing due to sync errors
+            self.logger.debug(f"Source sync skipped for {file_path}: {sync_err}")
 
         # Broadcast generation started event
         await websocket_manager.broadcast_batch_status(
@@ -500,8 +535,12 @@ class FileWatcher:
             # Scan existing files
             self._scan_existing_files()
 
-            # Set up watchdog observer
-            self.observer.schedule(self.event_handler, str(self.config.watch_directory), recursive=False)
+            # Record the running loop for cross-thread scheduling
+            self.loop = asyncio.get_running_loop()
+
+            # Set up watchdog observer (support recursive when env enables it)
+            recursive = os.getenv("RECURSIVE_SCAN", "false").lower() in ("true", "1", "yes", "on")
+            self.observer.schedule(self.event_handler, str(self.config.watch_directory), recursive=recursive)
 
             # Start processing task
             self._processing_task = asyncio.create_task(self._process_events())

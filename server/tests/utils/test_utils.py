@@ -334,7 +334,7 @@ class TestDirectoryStatus:
 class TestPrintStartupInfo:
     """Test cases for print_startup_info function."""
 
-    def test_print_startup_info_basic(self, capsys):
+    def test_print_startup_info_happy_path(self, capsys):
         """Test basic startup info printing."""
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)

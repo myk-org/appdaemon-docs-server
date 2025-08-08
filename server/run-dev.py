@@ -99,7 +99,7 @@ def run_container() -> None:
 
 
 def run_local_python() -> None:
-    """Run the development server with local Python."""
+    """Run the development server with local Python (with auto-reload)."""
     env_file = validate_env_file()
 
     # Load environment variables from .dev_env
@@ -125,7 +125,9 @@ def run_local_python() -> None:
     # Note: No path restrictions - allows documentation of external AppDaemon installations
 
     print(f"📂 Apps directory: {apps_path}")
-    print(f"🌐 Server will be available at: http://{os.environ['HOST']}:{os.environ['PORT']}")
+    host = os.environ["HOST"]
+    port = int(os.environ["PORT"])
+    print(f"🌐 Server will be available at: http://{host}:{port}")
     print()
 
     if apps_path.exists():
@@ -134,9 +136,33 @@ def run_local_python() -> None:
         print("⚠️  Apps directory not found - create it and add AppDaemon files")
     print()
 
-    from server.main import main as server_main
+    # Prefer invoking uvicorn via subprocess with --reload; this uses the
+    # reloader supervisor which is more reliable than in-process reload.
+    project_root = env_file.parent
+    reload_dirs = [
+        str(project_root / "server"),
+        str(project_root / "server" / "templates"),
+        str(project_root / "server" / "static"),
+    ]
 
-    server_main()
+    cmd = [
+        sys.executable,
+        "-m",
+        "uvicorn",
+        "server.main:app",
+        "--host",
+        host,
+        "--port",
+        str(port),
+        "--reload",
+    ]
+    for d in reload_dirs:
+        cmd.extend(["--reload-dir", d])
+
+    try:
+        subprocess.run(cmd, check=True)
+    except KeyboardInterrupt:
+        print("\n🛑 Stopping dev server...")
 
 
 def main() -> None:

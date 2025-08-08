@@ -1,3 +1,25 @@
+[tool.pytest.ini_options]
+minversion = "6.0"
+asyncio_mode = "auto"
+addopts = [
+  "--strict-markers",
+  "--strict-config",
+  "--pdbcls=IPython.terminal.debugger:TerminalPdb",
+  "-ra",
+]
+
+[tool.coverage.run]
+omit = ["server/tests/*", "server/run-dev.py"]
+source = ["server"]
+
+[tool.coverage.report]
+fail_under = 80
+skip_empty = true
+show_missing = true
+
+[tool.coverage.html]
+directory = ".tests_coverage"
+
 [project]
 name = "docs-server"
 version = "1.0.0"

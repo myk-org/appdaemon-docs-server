@@ -142,6 +142,7 @@ All configuration is handled through environment variables:
 | `WATCH_MAX_RETRIES`    | `3`        | Maximum retry attempts for failed generations   |
 | `WATCH_FORCE_REGENERATE` | `false`  | Force regenerate on file changes                |
 | `WATCH_LOG_LEVEL`      | `INFO`     | File watcher log level                           |
+| `RECURSIVE_SCAN`       | `false`    | Scan and watch nested subdirectories for .py files |
 | `APP_TITLE`            | `AppDaemon Documentation Server` | Application title |
 | `APP_DESCRIPTION`      | `Web interface for AppDaemon...` | Application description |
 
