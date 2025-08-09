@@ -12,20 +12,30 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+import html
+import time
+import shutil
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect, Query
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from fastapi_mcp import FastApiMCP
 from pygments.formatters import HtmlFormatter
+from pygments import highlight
+from pygments.lexers import PythonLexer
+import json
+from pydantic import BaseModel
+from starlette.middleware.gzip import GZipMiddleware
 
 from server.generators.batch_doc_generator import BatchDocGenerator
 from server.processors.markdown import MarkdownProcessor
 from server.services.docs import DocumentationService
+from server.utils.progress_callbacks import ProgressCallbackManager
 from server.utils.utils import (
     DirectoryStatus,
+    count_active_apps,
     get_environment_config,
     get_server_config,
     print_startup_info,
@@ -50,15 +60,31 @@ APP_DESCRIPTION = os.getenv(
 
 
 # Base paths - resolve at startup for better performance
-APPS_DIR_FROM_ENV = os.getenv("APPS_DIR")
+# REAL_APPS_DIR: real/original apps directory (source of truth)
+REAL_APPS_DIR_ENV = os.getenv("APPS_DIR")
 
-if not APPS_DIR_FROM_ENV:
+if not REAL_APPS_DIR_ENV:
     raise ValueError("APPS_DIR environment variable not set")
 
-APPS_DIR = Path(APPS_DIR_FROM_ENV).resolve()
+REAL_APPS_DIR = Path(REAL_APPS_DIR_ENV).resolve()
 DOCS_DIR = Path(os.getenv("DOCS_DIR", "data/generated-docs")).resolve()
+# MIRRORED_APPS_DIR: mirrored copy of apps used by the server for read-only/generation
+MIRRORED_APPS_DIR = Path(os.getenv("APP_SOURCES_DIR", "data/app-sources")).resolve()
+
+# Backward compatibility aliases for tests and external callers
+# Keep these names in sync with new naming
+APPS_DIR = REAL_APPS_DIR
+APP_SOURCES_DIR = MIRRORED_APPS_DIR
 TEMPLATES_DIR = Path(os.getenv("TEMPLATES_DIR", "server/templates")).resolve()
 STATIC_DIR = Path(os.getenv("STATIC_DIR", "server/static")).resolve()
+
+# Security: control exposure of absolute filesystem paths via API
+EXPOSE_ABS_PATHS_IN_API: bool = os.getenv("EXPOSE_ABS_PATHS_IN_API", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 # Global components for startup integration
 file_watcher: FileWatcher | None = None
@@ -73,6 +99,26 @@ markdown_processor = MarkdownProcessor()
 
 # Documentation service instance
 docs_service = DocumentationService(DOCS_DIR, markdown_processor)
+
+# Monotonic start timestamp for accurate uptime calculations
+START_TS: float = time.monotonic()
+
+
+def _format_elapsed(seconds: float) -> str:
+    """Return a compact human-readable duration like '1d 2h 3m 4s'."""
+    total = int(seconds)
+    days, rem = divmod(total, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, secs = divmod(rem, 60)
+    parts: list[str] = []
+    if days:
+        parts.append(f"{days}d")
+    if days or hours:
+        parts.append(f"{hours}h")
+    if days or hours or minutes:
+        parts.append(f"{minutes}m")
+    parts.append(f"{secs}s")
+    return " ".join(parts)
 
 
 async def run_initial_documentation_generation(dir_status: DirectoryStatus, config: dict[str, Any]) -> bool:
@@ -94,32 +140,22 @@ async def run_initial_documentation_generation(dir_status: DirectoryStatus, conf
     logger.info("🚀 Starting initial documentation generation...")
 
     try:
-        # Create batch generator
-        batch_generator = BatchDocGenerator(APPS_DIR, DOCS_DIR)
+        # Create batch generator (use mirrored apps directory for generation)
+        batch_generator = BatchDocGenerator(MIRRORED_APPS_DIR, DOCS_DIR)
 
         # Broadcast startup event
         await websocket_manager.broadcast_batch_status(
             EventType.BATCH_STARTED,
             "Starting initial documentation generation on server startup",
-            {"phase": "startup", "apps_directory": str(APPS_DIR)},
+            {"phase": "startup", "apps_directory": str(MIRRORED_APPS_DIR)},
         )
 
         # Progress callback setup
-        async def progress_callback(current: int, total: int, current_file: str, stage: str) -> None:
-            logger.debug(f"Generation progress: {current}/{total} - {current_file} ({stage})")
-            await websocket_manager.broadcast_generation_progress(
-                current=current, total=total, current_file=current_file, stage=stage
-            )
-
-        def sync_progress_callback(current: int, total: int, current_file: str, stage: str) -> None:
-            """Sync wrapper for async progress callback with proper task tracking."""
-            task = asyncio.create_task(progress_callback(current, total, current_file, stage))
-            pending_tasks.add(task)
-            task.add_done_callback(pending_tasks.discard)
+        progress_manager = ProgressCallbackManager(websocket_manager, pending_tasks)
 
         # Run generation
         results = batch_generator.generate_all_docs(
-            force_regenerate=config["force_regenerate"], progress_callback=sync_progress_callback
+            force_regenerate=config["force_regenerate"], progress_callback=progress_manager.sync_progress_callback
         )
 
         # Generate index file
@@ -181,7 +217,8 @@ async def start_file_watcher(dir_status: DirectoryStatus, config: dict[str, Any]
     try:
         # Create watcher configuration
         watch_config = WatchConfig(
-            watch_directory=APPS_DIR,
+            watch_directory=REAL_APPS_DIR,
+            generation_directory=MIRRORED_APPS_DIR,
             output_directory=DOCS_DIR,
             debounce_delay=config["watch_debounce_delay"],
             max_retry_attempts=config["watch_max_retries"],
@@ -193,12 +230,14 @@ async def start_file_watcher(dir_status: DirectoryStatus, config: dict[str, Any]
         watcher = FileWatcher(watch_config)
         await watcher.start_watching()
 
-        logger.info(f"✅ File watcher started successfully for {APPS_DIR}")
+        logger.info(
+            f"✅ File watcher started successfully. Watching: {REAL_APPS_DIR} | Generating from: {MIRRORED_APPS_DIR}"
+        )
 
         await websocket_manager.broadcast_batch_status(
             EventType.WATCHER_STATUS,
             "File watcher started successfully",
-            {"watch_directory": str(APPS_DIR), "status": "active"},
+            {"watch_directory": str(REAL_APPS_DIR), "status": "active"},
         )
 
         return watcher
@@ -264,7 +303,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Startup
     logger.info(f"Starting {APP_TITLE} v{APP_VERSION}")
     logger.info(f"Documentation directory: {DOCS_DIR}")
-    logger.info(f"Apps directory: {APPS_DIR}")
+    logger.info(f"Real apps directory: {REAL_APPS_DIR}")
+    logger.info(f"Mirrored apps directory: {MIRRORED_APPS_DIR}")
 
     startup_errors.clear()
 
@@ -272,18 +312,62 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # Initialize directories and check status
         logger.info("📁 Initializing directories...")
         DOCS_DIR.mkdir(parents=True, exist_ok=True)
+        MIRRORED_APPS_DIR.mkdir(parents=True, exist_ok=True)
 
         # Get directory status and configuration
-        dir_status = DirectoryStatus(APPS_DIR, DOCS_DIR)
+        dir_status = DirectoryStatus(REAL_APPS_DIR, DOCS_DIR)
         config = get_environment_config()
 
         # Log directory status
         if not dir_status.apps_exists:
-            error_msg = f"Apps directory not found: {APPS_DIR}"
+            error_msg = f"Apps directory not found: {REAL_APPS_DIR}"
             logger.error(error_msg)
             startup_errors.append(error_msg)
         else:
             logger.info(f"Found {dir_status.apps_count} automation files to process")
+
+        # Copy AppDaemon source files for read-only viewing
+        try:
+            # Create a clean mirror: remove files in APP_SOURCES_DIR that no longer exist in APPS_DIR
+            try:
+                source_rel_paths = set()
+                for s in REAL_APPS_DIR.rglob("*.py"):
+                    try:
+                        source_rel_paths.add(str(s.relative_to(REAL_APPS_DIR)))
+                    except ValueError:
+                        source_rel_paths.add(s.name)
+
+                if MIRRORED_APPS_DIR.exists():
+                    for existing in MIRRORED_APPS_DIR.rglob("*.py"):
+                        rel_existing = str(existing.relative_to(MIRRORED_APPS_DIR))
+                        if rel_existing not in source_rel_paths:
+                            try:
+                                existing.unlink()
+                            except Exception as de:
+                                logger.debug(f"Skip deleting stale mirror file {existing}: {de}")
+            except Exception as cleanup_err:
+                logger.debug(f"Mirror cleanup skipped due to error: {cleanup_err}")
+
+            copied = 0
+            for src in REAL_APPS_DIR.rglob("*.py"):
+                # Preserve relative structure
+                try:
+                    rel = src.relative_to(REAL_APPS_DIR)
+                except ValueError:
+                    # If outside APPS_DIR (shouldn't happen), flatten
+                    rel = Path(src.name)
+                dest = MIRRORED_APPS_DIR / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                # Always copy latest (overwrite if equal or newer)
+                try:
+                    if not dest.exists() or src.stat().st_mtime >= dest.stat().st_mtime:
+                        shutil.copy2(src, dest)
+                        copied += 1
+                except Exception as ce:
+                    logger.debug(f"Skip copying {src}: {ce}")
+            logger.info(f"📄 Prepared {copied} AppDaemon source file(s) for read-only viewing")
+        except Exception as copy_err:
+            logger.warning(f"Failed to prepare app sources for viewing: {copy_err}")
 
         # Run initial documentation generation
         startup_generation_completed = await run_initial_documentation_generation(dir_status, config)
@@ -319,7 +403,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             pending_tasks.clear()
 
         # Clear markdown processor cache
-        markdown_processor._cache.clear()
+        try:
+            markdown_processor.clear_cache()
+        except Exception:
+            # Fallback for backward compatibility
+            markdown_processor._cache.clear()
 
         # Broadcast shutdown event
         await websocket_manager.broadcast_batch_status(
@@ -344,6 +432,81 @@ app = FastAPI(
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
+# Add GZip compression for large responses
+app.add_middleware(GZipMiddleware, minimum_size=500)
+
+
+# Basic security headers middleware (CSP allows CDN and inline for current templates)
+@app.middleware("http")  # type: ignore[misc]
+async def add_security_headers(request: Request, call_next: Any) -> Response:
+    response: Response = await call_next(request)
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self' https:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; "
+        "style-src 'self' 'unsafe-inline' https:; img-src 'self' data: https:; connect-src 'self'",
+    )
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    return response
+
+
+# ----------------------
+# Response Models
+# ----------------------
+
+
+class FilesResponse(BaseModel):  # type: ignore[misc]
+    # Use loose typing here to allow passthrough of mocked/test data and avoid over-constraining API shape
+    files: list[dict[str, Any]]
+    total_count: int
+    docs_available: bool
+    docs_directory: str
+    limit: int | None = None
+    offset: int | None = None
+
+
+class HealthResponse(BaseModel):  # type: ignore[misc]
+    status: str
+    service: str
+    version: str
+    docs_directory_exists: bool
+    apps_directory_exists: bool
+    docs_files_count: int
+    startup_generation_completed: bool
+    file_watcher_active: bool
+    startup_errors_count: int
+    startup_errors: list[str]
+    uptime: str
+    uptime_seconds: float
+
+
+class FileContentResponse(BaseModel):  # type: ignore[misc]
+    filename: str
+    title: str
+    content: str
+    type: str
+
+
+class AppSourceInfo(BaseModel):  # type: ignore[misc]
+    module: str
+    rel_path: str
+    abs_path: str | None = None
+    size: int
+    modified: float
+
+
+class AppSourceListResponse(BaseModel):  # type: ignore[misc]
+    apps: list[AppSourceInfo]
+    total_count: int
+
+
+class AppSourceContentResponse(BaseModel):  # type: ignore[misc]
+    module: str
+    rel_path: str
+    abs_path: str | None = None
+    content: str
+
 
 # API Routes with proper error handling and response models
 
@@ -354,8 +517,8 @@ async def root() -> RedirectResponse:
     return RedirectResponse(url="/docs/", status_code=307)
 
 
-@app.get("/health", operation_id="health")  # type: ignore[misc]
-async def health_check() -> dict[str, str | bool | int | list[str]]:
+@app.get("/health", operation_id="health", response_model=HealthResponse)  # type: ignore[misc]
+async def health_check() -> HealthResponse:
     """
     Health check endpoint for monitoring server status.
 
@@ -365,7 +528,7 @@ async def health_check() -> dict[str, str | bool | int | list[str]]:
     global file_watcher, startup_generation_completed, startup_errors
 
     docs_exists = DOCS_DIR.exists()
-    apps_exists = APPS_DIR.exists()
+    apps_exists = REAL_APPS_DIR.exists()
     docs_count = 0
 
     if docs_exists:
@@ -381,23 +544,29 @@ async def health_check() -> dict[str, str | bool | int | list[str]]:
     elif not startup_generation_completed and apps_exists:
         status = "starting"
 
-    return {
-        "status": status,
-        "service": "appdaemon-docs-server",
-        "version": APP_VERSION,
-        "docs_directory_exists": docs_exists,
-        "apps_directory_exists": apps_exists,
-        "docs_files_count": docs_count,
-        "startup_generation_completed": startup_generation_completed,
-        "file_watcher_active": file_watcher is not None and file_watcher.is_watching,
-        "startup_errors_count": len(startup_errors),
-        "startup_errors": startup_errors,
-        "uptime": "running",
-    }
+    # Compute uptime using monotonic clock
+    uptime_seconds = time.monotonic() - START_TS
+
+    return HealthResponse(
+        status=status,
+        service="appdaemon-docs-server",
+        version=APP_VERSION,
+        docs_directory_exists=docs_exists,
+        apps_directory_exists=apps_exists,
+        docs_files_count=docs_count,
+        startup_generation_completed=startup_generation_completed,
+        file_watcher_active=file_watcher is not None and file_watcher.is_watching,
+        startup_errors_count=len(startup_errors),
+        startup_errors=startup_errors,
+        uptime=_format_elapsed(uptime_seconds),
+        uptime_seconds=uptime_seconds,
+    )
 
 
-@app.get("/api/files", operation_id="list_files")  # type: ignore[misc]
-async def list_documentation_files() -> dict[str, list[dict[str, Any]] | int | bool | str]:
+@app.get("/api/files", operation_id="list_files", response_model=FilesResponse)  # type: ignore[misc]
+async def list_documentation_files(
+    limit: int | None = Query(None, ge=1), offset: int | None = Query(None, ge=0)
+) -> FilesResponse:
     """
     List all available documentation files with metadata.
 
@@ -406,19 +575,30 @@ async def list_documentation_files() -> dict[str, list[dict[str, Any]] | int | b
     """
     try:
         files = await docs_service.get_file_list()
-        return {
-            "files": files,
-            "total_count": len(files),
-            "docs_available": DOCS_DIR.exists(),
-            "docs_directory": str(DOCS_DIR),
-        }
+        total = len(files)
+        if offset is not None or limit is not None:
+            start = offset or 0
+            end = start + (limit or total)
+            files = files[start:end]
+
+        # Ensure clients do not receive unexpected fields when optional ones are None
+        sanitized_files = [{k: v for k, v in f.items() if v is not None} for f in files]
+
+        return FilesResponse(
+            files=sanitized_files,
+            total_count=total,
+            docs_available=DOCS_DIR.exists(),
+            docs_directory=str(DOCS_DIR),
+            limit=limit,
+            offset=offset,
+        )
     except Exception as e:
         logger.error(f"Error listing files: {e}")
         raise HTTPException(status_code=500, detail="Error listing documentation files") from e
 
 
-@app.get("/api/file/{filename}", operation_id="get_file")  # type: ignore[misc]
-async def get_file_content(filename: str) -> dict[str, str]:
+@app.get("/api/file/{filename}", operation_id="get_file", response_model=FileContentResponse)  # type: ignore[misc]
+async def get_file_content(filename: str) -> FileContentResponse:
     """
     Get processed content for a specific documentation file.
 
@@ -430,12 +610,152 @@ async def get_file_content(filename: str) -> dict[str, str]:
     """
     try:
         html_content, title = await docs_service.get_file_content(filename)
-        return {"filename": filename, "title": title, "content": html_content, "type": "markdown"}
+        return FileContentResponse(filename=filename, title=title, content=html_content, type="markdown")
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error getting file content for {filename}: {e}")
         raise HTTPException(status_code=500, detail="Error processing file content") from e
+
+
+@app.get("/api/app-source/{module}", operation_id="get_app_source")  # type: ignore[misc]
+async def get_app_source(module: str, fmt: str = Query("text"), theme: str = Query("light")) -> Response:
+    """
+    Return the read-only Python source file for a given module name (stem).
+
+    Args:
+        module: The module stem (without .py)
+
+    Returns:
+        Plain text response with the source code
+    """
+    try:
+        safe_module = module.replace("..", "").replace("/", "").replace("\\", "")
+        source_path = None
+        # Search for matching file in MIRRORED_APPS_DIR
+        candidates = list(MIRRORED_APPS_DIR.rglob(f"{safe_module}.py"))
+        if candidates:
+            # Prefer root-level match; else pick first
+            candidates.sort(key=lambda p: len(p.parts))
+            source_path = candidates[0]
+        if source_path is None or not source_path.exists():
+            raise HTTPException(status_code=404, detail=f"Source for '{module}' not found")
+
+        with open(source_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        if fmt == "html":
+            style_name = "default" if theme != "dark" else "monokai"
+            container_id = "app-source-viewer"
+            formatter = HtmlFormatter(noclasses=False, style=style_name)
+            # Scope style to this viewer only
+            scoped_css = formatter.get_style_defs(f"#{container_id} .highlight")
+            highlighted = highlight(content, PythonLexer(), formatter)
+            html = f'<style>{scoped_css}</style><div id="{container_id}">{highlighted}</div>'
+            return HTMLResponse(content=html)
+
+        return Response(content=content, media_type="text/plain; charset=utf-8")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error reading app source for {module}: {e}")
+        raise HTTPException(status_code=500, detail="Error reading app source") from e
+
+
+@app.get("/api/app-sources", operation_id="list_app_sources", response_model=AppSourceListResponse)  # type: ignore[misc]
+async def list_app_sources() -> AppSourceListResponse:
+    """List mirrored AppDaemon source files available for AI analysis."""
+    apps: list[AppSourceInfo] = []
+    try:
+        if MIRRORED_APPS_DIR.exists():
+            for py in MIRRORED_APPS_DIR.rglob("*.py"):
+                rel = str(py.relative_to(MIRRORED_APPS_DIR))
+                info_kwargs: dict[str, Any] = {
+                    "module": py.stem,
+                    "rel_path": rel,
+                    "size": py.stat().st_size,
+                    "modified": py.stat().st_mtime,
+                }
+                if EXPOSE_ABS_PATHS_IN_API:
+                    info_kwargs["abs_path"] = str(py.resolve())
+                apps.append(AppSourceInfo(**info_kwargs))
+    except Exception as e:
+        logger.warning(f"Error listing app sources: {e}")
+    return AppSourceListResponse(apps=apps, total_count=len(apps))
+
+
+@app.get("/api/app-source/raw/{module}", operation_id="get_app_source_raw", response_model=AppSourceContentResponse)  # type: ignore[misc]
+async def get_app_source_raw(module: str) -> AppSourceContentResponse:
+    """Return raw app source content for AI/MCP consumption."""
+    try:
+        safe_module = module.replace("..", "").replace("/", "").replace("\\", "")
+        candidates = list(MIRRORED_APPS_DIR.rglob(f"{safe_module}.py"))
+        if not candidates:
+            raise HTTPException(status_code=404, detail=f"Source for '{module}' not found")
+        candidates.sort(key=lambda p: len(p.parts))
+        source_path = candidates[0]
+        content = source_path.read_text(encoding="utf-8")
+        resp_kwargs: dict[str, Any] = {
+            "module": safe_module,
+            "rel_path": str(source_path.relative_to(MIRRORED_APPS_DIR)),
+            "content": content,
+        }
+        if EXPOSE_ABS_PATHS_IN_API:
+            resp_kwargs["abs_path"] = str(source_path.resolve())
+        return AppSourceContentResponse(**resp_kwargs)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error reading app source (raw) for {module}: {e}")
+        raise HTTPException(status_code=500, detail="Error reading app source") from e
+
+
+@app.get("/partials/app-sources", response_class=HTMLResponse)  # type: ignore[misc]
+async def partial_app_sources() -> HTMLResponse:
+    """Return HTML fragment listing configured app sources (for HTMX)."""
+    try:
+        active_modules = set()
+        try:
+            files = await docs_service.get_file_list()
+            doc_stems = [str(file.get("stem", Path(str(file["name"])).stem)) for file in files]
+            app_counts = count_active_apps(REAL_APPS_DIR, doc_stems=doc_stems)
+            active_modules_value = app_counts.get("active_modules", [])
+            active_modules = set(active_modules_value if isinstance(active_modules_value, list) else [])
+        except Exception:
+            active_modules = set()
+
+        apps = []
+        if MIRRORED_APPS_DIR.exists():
+            for py in MIRRORED_APPS_DIR.rglob("*.py"):
+                try:
+                    mod = py.stem
+                    if active_modules and mod not in active_modules:
+                        continue
+                    rel = str(py.relative_to(MIRRORED_APPS_DIR))
+                    size_kb = f"{py.stat().st_size / 1024:.1f}"
+                    apps.append((mod, rel, size_kb))
+                except Exception:
+                    continue
+
+        apps.sort(key=lambda x: x[1])
+
+        # Simple HTML list fragment
+        html = [
+            '<div class="p-2">',
+            '<div class="text-sm text-gray-500 mb-2">Configured Apps</div>',
+            '<ul class="divide-y divide-gray-200">',
+        ]
+        for mod, rel, size_kb in apps:
+            html.append(
+                f'<li class="py-2"><button class="text-left w-full hover:underline" onclick="window.openSourceViewer(\'{mod}\')"><strong>{mod}.py</strong><div class="text-xs text-gray-500">{rel} • {size_kb} KB</div></button></li>'
+            )
+        if not apps:
+            html.append('<li class="py-2 text-sm text-gray-500">No configured apps found</li>')
+        html.append("</ul></div>")
+        return HTMLResponse("".join(html))
+    except Exception as e:
+        logger.error(f"Error rendering app sources partial: {e}")
+        raise HTTPException(status_code=500, detail="Error rendering partial") from e
 
 
 @app.get("/docs/", response_class=HTMLResponse)  # type: ignore[misc]
@@ -451,13 +771,24 @@ async def documentation_index(request: Request) -> HTMLResponse:
     """
     try:
         files = await docs_service.get_file_list()
+
+        # Filter to only apps configured in apps.yaml (read from real apps dir)
+        doc_stems = [str(file.get("stem", Path(str(file["name"])).stem)) for file in files]
+        app_counts = count_active_apps(REAL_APPS_DIR, doc_stems=doc_stems)
+        active_modules_value = app_counts.get("active_modules", [])
+        active_modules = set(active_modules_value if isinstance(active_modules_value, list) else [])
+        files = [f for f in files if str(f.get("stem")) in active_modules]
+
         return templates.TemplateResponse(
+            request,
             "index.html",
             {
-                "request": request,
                 "title": "AppDaemon Documentation",
                 "files": files,
+                # Only configured apps are shown, so total_files reflects configured apps count
                 "total_files": len(files),
+                # Provide active modules for client-side filtering on dynamic refresh
+                "active_modules": sorted(list(active_modules)),
             },
         )
     except Exception as e:
@@ -481,9 +812,9 @@ async def documentation_file(request: Request, filename: str) -> HTMLResponse:
         html_content, title = await docs_service.get_file_content(filename)
 
         return templates.TemplateResponse(
+            request,
             "document.html",
             {
-                "request": request,
                 "title": title,
                 "content": html_content,
                 "filename": filename,
@@ -540,9 +871,11 @@ async def search_documentation(q: str = "") -> dict[str, list[dict[str, Any]] | 
                         if start_pos != -1:
                             context_start = max(0, start_pos - 100)
                             context_end = min(len(content), start_pos + len(query) + 100)
-                            context = content[context_start:context_end].strip()
-                            # Highlight the search term
-                            context = context.replace(query, f"**{query}**")
+                            raw = content[context_start:context_end].strip()
+                            # Escape HTML to prevent injection in UI, then highlight query
+                            escaped = html.escape(raw)
+                            # Highlight the search term (case-insensitive match on escaped text is tricky; use original query lower)
+                            context = escaped.replace(html.escape(query), f"<mark>{html.escape(query)}</mark>")
 
                     title = await docs_service.extract_title(file_path)
 
@@ -629,6 +962,51 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         await websocket_manager.disconnect(websocket)
 
 
+@app.get("/sse", include_in_schema=False)  # type: ignore[misc]
+async def sse_endpoint() -> StreamingResponse:
+    """
+    Server-Sent Events endpoint streaming the same events as WebSocket.
+    Useful for simpler clients or proxies.
+    """
+    broker = websocket_manager.get_sse_broker()
+    queue = await broker.subscribe()
+
+    async def event_stream() -> AsyncGenerator[bytes, None]:
+        try:
+            # Initial hello
+            yield b"event: system_status\n"
+            yield b'data: {"message": "SSE connected"}\n\n'
+
+            while True:
+                event = await queue.get()
+                data = json.dumps(event).encode()
+                # Optional: include event name
+                yield b"event: " + event.get("event_type", "message").encode() + b"\n"
+                yield b"data: " + data + b"\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await broker.unsubscribe(queue)
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "Content-Type": "text/event-stream",
+    }
+    return StreamingResponse(event_stream(), headers=headers, media_type="text/event-stream")
+
+
+@app.head("/sse", include_in_schema=False)  # type: ignore[misc]
+async def sse_head() -> Response:
+    """HEAD for SSE to allow header validation without opening a stream."""
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "Content-Type": "text/event-stream",
+    }
+    return Response(status_code=200, headers=headers, media_type="text/event-stream")
+
+
 @app.get("/api/ws/status", operation_id="ws_status")  # type: ignore[misc]
 async def websocket_status() -> dict[str, Any]:
     """
@@ -692,6 +1070,7 @@ async def trigger_full_generation(force: bool = False) -> dict[str, Any]:
     global file_watcher
 
     try:
+        # Backward-compat: validate against APPS_DIR so tests can patch it
         if not APPS_DIR.exists():
             raise HTTPException(status_code=404, detail=f"Apps directory not found: {APPS_DIR}")
 
@@ -701,7 +1080,7 @@ async def trigger_full_generation(force: bool = False) -> dict[str, Any]:
             # Use file watcher's generation method for consistency
             results = await file_watcher.generate_all_docs(force=force)
         else:
-            # Fallback to direct batch generation
+            # Fallback to direct batch generation (use APPS_DIR for compatibility)
             batch_generator = BatchDocGenerator(APPS_DIR, DOCS_DIR)
 
             await websocket_manager.broadcast_batch_status(
@@ -762,6 +1141,7 @@ async def trigger_single_file_generation(filename: str, force: bool = False) -> 
         if not filename.endswith(".py"):
             filename += ".py"
 
+        # Use APPS_DIR for compatibility with tests that patch it
         file_path = APPS_DIR / filename
 
         if not file_path.exists():
@@ -825,6 +1205,29 @@ async def trigger_single_file_generation(filename: str, force: bool = False) -> 
         raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}") from e
 
 
+@app.post("/api/generate/index", operation_id="generate_index")  # type: ignore[misc]
+async def regenerate_index() -> dict[str, Any]:
+    """
+    Regenerate only the index file from current automation files.
+    """
+    try:
+        batch_generator = BatchDocGenerator(MIRRORED_APPS_DIR, DOCS_DIR)
+        index_content = batch_generator.generate_index_file()
+        index_path = DOCS_DIR / "README.md"
+        index_path.write_text(index_content, encoding="utf-8")
+
+        await websocket_manager.broadcast_batch_status(
+            EventType.BATCH_COMPLETED, "Index file regenerated", {"index_path": str(index_path)}
+        )
+
+        return {"success": True, "message": "Index regenerated", "index_path": str(index_path)}
+    except Exception as e:
+        await websocket_manager.broadcast_batch_status(
+            EventType.BATCH_ERROR, f"Failed to regenerate index: {str(e)}", {"error": str(e)}
+        )
+        raise HTTPException(status_code=500, detail="Failed to regenerate index") from e
+
+
 @app.post("/api/ws/broadcast", operation_id="broadcast_test")  # type: ignore[misc]
 async def broadcast_test_message(message: str = "Test message") -> dict[str, Any]:
     """
@@ -886,14 +1289,14 @@ def main() -> None:
     # Get configuration from centralized utilities
     server_config = get_server_config()
     env_config = get_environment_config()
-    dir_status = DirectoryStatus(APPS_DIR, DOCS_DIR)
+    dir_status = DirectoryStatus(REAL_APPS_DIR, DOCS_DIR)
 
     # Print comprehensive startup information
     print_startup_info(dir_status, server_config, env_config)
 
     # Create uvicorn configuration
     config = uvicorn.Config(
-        "main:app",
+        "server.main:app",
         host=server_config["host"],
         port=server_config["port"],
         reload=server_config["reload"],

@@ -302,6 +302,67 @@ def create_method_flow_diagram(method_info: Any) -> str:
     return diagram
 
 
+def create_multi_method_flow_diagram(
+    methods_info: list[Any],
+    method_triggers: dict[str, list[str]] | None = None,
+) -> str:
+    """Create a combined flow diagram for multiple methods.
+
+    Each method is rendered as a subgraph containing its sequential actions.
+    """
+    generator = MermaidDiagramGenerator()
+
+    for mi_index, method_info in enumerate(methods_info):
+        nodes_for_method: list[DiagramNode] = []
+        method_prefix = f"m{mi_index}_{method_info.name}"
+
+        # Add trigger node(s) for this method if provided
+        trigger_labels = []
+        if method_triggers and method_info.name in method_triggers:
+            trigger_labels = method_triggers[method_info.name]
+        if trigger_labels:
+            trigger_text = "\n".join(trigger_labels[:3])
+            if len(trigger_labels) > 3:
+                trigger_text += f"\n(+{len(trigger_labels) - 3} more)"
+            trigger_node_id = f"{method_prefix}_trigger"
+            nodes_for_method.append(DiagramNode(trigger_node_id, trigger_text, NodeStyle.SENSOR, "rect"))
+
+        # Create nodes for each action in the method
+        for i, action in enumerate(method_info.actions):
+            style = _get_action_style(action.action_type)
+            shape = "diamond" if action.action_type == "conditional_logic" else "rect"
+
+            node_id = f"{method_prefix}_step_{i}"
+            # Make labels more descriptive
+            base = action.description.replace(":", "")
+            if getattr(action, "entities_involved", None):
+                entities = ", ".join(action.entities_involved[:2])
+                if len(action.entities_involved) > 2:
+                    entities += ", …"
+                base = f"{base}\\n{entities}"
+            label = base
+            if action.action_type == "conditional_logic":
+                label = "Decision"
+
+            node = DiagramNode(node_id, label, style, shape)
+            nodes_for_method.append(node)
+
+            # Connect to previous step
+            if i > 0:
+                generator.add_edge(f"{method_prefix}_step_{i - 1}", node_id)
+
+        # Add as subgraph titled with method name
+        title = f"{method_info.name}()"
+        if nodes_for_method:
+            generator.add_subgraph(f"sg_{method_prefix}", title, nodes_for_method)
+
+        # Add connection from trigger to first step
+        if trigger_labels and any(a for a in method_info.actions):
+            generator.add_edge(f"{method_prefix}_trigger", f"{method_prefix}_step_0")
+
+    return generator.generate_flowchart("TD")
+
+
 def _create_action_summary(method_info: Any) -> str:
     """Create a summary of actions for a method like in climate.md."""
     action_types = []

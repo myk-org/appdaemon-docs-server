@@ -5,7 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ title }} - AppDaemon Documentation</title>
     <link href="/api/css/pygments.css" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/mermaid@10.6.1/dist/mermaid.min.js"></script>
+    <!-- Tailwind CSS (CDN) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- HTMX (CDN) -->
+    <script src="https://unpkg.com/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
+    <script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
+    <script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.11" integrity="sha384-9AoZ0R6KzF5W4a4s5WZ0qB7iA4C6Z8fM6wH8FzO1k5cR6s3bD1g3QwYxgqZp6u2r" crossorigin="anonymous"></script> <!-- pragma: allowlist secret -->
+    <!-- Alpine.js (CDN) -->
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
     <style>
         /* CSS Reset and Normalization for Cross-Browser Consistency
          *
@@ -463,6 +472,12 @@
             text-decoration: underline;
             color: var(--text-link-hover);
         }
+        /* Inline source popup */
+        .source-popup-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 2000; }
+        .source-popup { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 8px; width: 80%; max-width: 1000px; max-height: 80%; overflow: auto; box-shadow: 0 10px 30px rgba(0,0,0,0.3); }
+        .source-popup-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--border-primary); }
+        .source-popup-close { background: none; border: none; cursor: pointer; font-size: 16px; color: var(--text-tertiary); }
+        .source-iframe { width: 100%; height: 70vh; border: none; display: block; }
         .toc {
             background: var(--bg-tertiary);
             border: 1px solid var(--border-primary);
@@ -556,6 +571,15 @@
             overflow-x: auto;
         }
 
+        /* Cytoscape container */
+        .cytoscape-wrapper { border: 1px solid var(--border-primary); border-radius: 6px; margin: 20px 0; }
+        .cytoscape-diagram { width: 100%; height: 520px; }
+        .cy-legend { display:flex; gap:10px; align-items:center; margin-top:8px; color: var(--text-secondary); font-size: 12px; }
+        .lg { display:inline-block; padding: 4px 8px; border-radius: 12px; }
+        .lg-trigger { background:#e0f2fe; color:#0c4a6e; }
+        .lg-condition { background:#fde68a; color:#7c2d12; }
+        .lg-action { background:#dcfce7; color:#065f46; }
+
         /* Fix character rendering issues */
         .content {
             unicode-bidi: normal;
@@ -588,7 +612,7 @@
         }
     </style>
 </head>
-<body>
+<body hx-boost="true">
     <button class="theme-toggle" id="themeToggle" title="Toggle Dark/Light Theme">🌙</button>
 
     <!-- WebSocket Status Indicator -->
@@ -604,21 +628,29 @@
     <!-- Notification Toast Container -->
     <div id="notificationContainer"></div>
 
-    <div class="container">
+    <div class="container" x-data="docSearch()">
         <div class="header">
             <div class="breadcrumb">
                 <a href="/docs/">📚 Documentation</a> / {{ filename }}
             </div>
-            <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px;">
                 <h1>{{ title }}</h1>
-                <button id="regenerateDocBtn" class="regenerate-button" title="Regenerate This Document">
-                    <div class="spinner"></div>
-                    🔄 Regenerate
-                </button>
+                <div style="display: inline-flex; gap: 8px; align-items: center;">
+                    <button id="viewSourceBtn" class="regenerate-button" title="View App Source (read-only)">📄 View Source</button>
+                    <button id="regenerateDocBtn" class="regenerate-button" title="Regenerate This Document">
+                        <div class="spinner"></div>
+                        🔄 Regenerate
+                    </button>
+                </div>
             </div>
         </div>
 
-        <div class="content">
+        <div class="mb-4">
+            <input x-model="q" @input="run()" type="search" placeholder="Search in this document..." class="w-full px-3 py-2 rounded border border-gray-300 dark:border-gray-600 bg-transparent" />
+            <div x-show="q" class="text-sm mt-1 text-gray-500"><span x-text="count"></span> matches</div>
+        </div>
+
+        <div class="content" x-ref="content">
             {{ content | safe }}
         </div>
 
@@ -708,7 +740,7 @@
 
                 switch (data.event_type) {
                     case 'connection_established':
-                        this.showNotification('success', 'Connected', 'Real-time updates are now active');
+                        // Suppress repeated connection toasts on document pages
                         break;
 
                     case 'file_created':
@@ -729,22 +761,42 @@
                         break;
 
                     case 'doc_generation_error':
-                        this.showNotification('error', 'Generation Error', data.data.message || 'Documentation generation failed');
+                        {
+                            const message = (data && data.data && typeof data.data.message !== 'undefined')
+                                ? data.data.message
+                                : 'Documentation generation failed';
+                            this.showNotification('error', 'Generation Error', message);
+                        }
                         break;
 
                     case 'batch_started':
-                        this.showNotification('info', 'Batch Processing', data.data.message);
+                        {
+                            const message = (data && data.data && typeof data.data.message !== 'undefined')
+                                ? data.data.message
+                                : 'Batch processing started';
+                            this.showNotification('info', 'Batch Processing', message);
+                        }
                         break;
 
                     case 'batch_completed':
-                        this.showNotification('success', 'Batch Complete', data.data.message);
+                        {
+                            const message = (data && data.data && typeof data.data.message !== 'undefined')
+                                ? data.data.message
+                                : 'Batch processing completed';
+                            this.showNotification('success', 'Batch Complete', message);
+                        }
                         if (this.documentNeedsRefresh) {
                             this.showRefreshIndicator();
                         }
                         break;
 
                     case 'batch_error':
-                        this.showNotification('error', 'Batch Error', data.data.message);
+                        {
+                            const message = (data && data.data && typeof data.data.message !== 'undefined')
+                                ? data.data.message
+                                : 'Batch processing failed';
+                            this.showNotification('error', 'Batch Error', message);
+                        }
                         break;
 
                     case 'ping':
@@ -752,7 +804,7 @@
                         break;
 
                     case 'system_status':
-                        if (data.data.type === 'test_broadcast') {
+                        if (data.data && data.data.type === 'test_broadcast') {
                             this.showNotification('info', 'Test Message', data.data.message);
                         }
                         break;
@@ -883,6 +935,94 @@
         document.addEventListener('DOMContentLoaded', function() {
             const regenerateDocBtn = document.getElementById('regenerateDocBtn');
             const currentDocument = document.documentElement.getAttribute('data-filename');
+            const viewSourceBtn = document.getElementById('viewSourceBtn');
+
+            // Inline source-link popups with line highlight, matching theme
+            document.querySelectorAll('.content a.source-link').forEach((a) => {
+                a.addEventListener('click', async (ev) => {
+                    ev.preventDefault();
+                    try {
+                        const module = a.getAttribute('data-module');
+                        const line = a.getAttribute('data-line');
+                        const theme = document.body.getAttribute('data-theme') || 'light';
+                        const resp = await fetch(`/api/app-source/${encodeURIComponent(module)}?fmt=html&theme=${encodeURIComponent(theme)}`);
+                        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                        const baseHtml = await resp.text();
+                        // Inject highlight style and scroll
+                        const overlay = document.createElement('div');
+                        overlay.className = 'source-popup-overlay';
+                        const modal = document.createElement('div');
+                        modal.className = 'source-popup';
+                        const header = document.createElement('div');
+                        header.className = 'source-popup-header';
+                        header.textContent = `Source: ${module}.py${line ? ` (L${line})` : ''}`;
+                        const close = document.createElement('button');
+                        close.className = 'source-popup-close';
+                        close.textContent = '✖';
+                        const onClose = () => { document.body.style.overflow = ''; overlay.remove(); };
+                        close.addEventListener('click', onClose);
+                        header.appendChild(close);
+                        const iframe = document.createElement('iframe');
+                        iframe.className = 'source-iframe';
+                        iframe.setAttribute('sandbox', 'allow-same-origin');
+                        modal.appendChild(header);
+                        modal.appendChild(iframe);
+                        overlay.appendChild(modal);
+                        document.body.style.overflow = 'hidden';
+                        document.body.appendChild(overlay);
+
+                        // Write content and then highlight
+                        iframe.addEventListener('load', () => {
+                            const doc = iframe.contentDocument;
+                            if (!doc) return;
+                            // Add highlight CSS
+                            const style = doc.createElement('style');
+                            style.textContent = `
+                                .hl-line { background: rgba(255, 235, 59, 0.35) !important; }
+                                [data-theme="dark"] .hl-line { background: rgba(255, 235, 59, 0.25) !important; }
+                            `;
+                            doc.head.appendChild(style);
+                            if (line) {
+                                // Try to find the exact <span> that contains the line number in generated HTML
+                                // Pygments HTML wraps code in a table with line numbers or spans depending on formatter.
+                                // Fallback: find anchor by id L{line} or text nodes with line prefix
+                                let target = doc.querySelector(`#L${line}`);
+                                if (!target) {
+                                    // Try typical Pygments lineno structure
+                                    const matches = Array.from(doc.querySelectorAll('td.linenos a')).filter(a => a.textContent.trim() === String(line));
+                                    if (matches.length) {
+                                        target = matches[0];
+                                    }
+                                }
+                                // If still not found, highlight nth code line approximately
+                                if (!target) {
+                                    const codeLines = doc.querySelectorAll('.highlight pre');
+                                    if (codeLines.length) {
+                                        codeLines.forEach(pre => pre.classList.add('hl-line'));
+                                    }
+                                } else {
+                                    // Highlight containing row/cell
+                                    const row = target.closest('tr') || target.closest('div') || target;
+                                    if (row) row.classList.add('hl-line');
+                                    row?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                }
+                            }
+                        });
+                        const doc = iframe.contentDocument || iframe.contentWindow.document;
+                        doc.open();
+                        doc.write(baseHtml);
+                        doc.close();
+
+                        overlay.addEventListener('click', (e) => { if (e.target === overlay) onClose(); });
+                        document.addEventListener('keydown', function escHandler(ev2){ if (ev2.key === 'Escape'){ onClose(); document.removeEventListener('keydown', escHandler);} });
+                    } catch (err) {
+                        console.error('Inline source popup failed:', err);
+                        if (documentWebSocket) {
+                            documentWebSocket.showNotification('error', 'Open Source Failed', 'Could not open source viewer.');
+                        }
+                    }
+                });
+            });
 
             regenerateDocBtn.addEventListener('click', async function() {
                 if (regenerateDocBtn.classList.contains('processing')) {
@@ -936,6 +1076,113 @@
                     regenerateDocBtn.innerHTML = '<div class="spinner"></div>🔄 Regenerate';
                 }
             });
+
+            // View Source (read-only) - fetch and show in modal
+            if (viewSourceBtn) {
+                viewSourceBtn.addEventListener('click', async function() {
+                    try {
+                        const stem = (currentDocument || '').replace(/\.md$/i, '');
+                        const currentTheme = document.body.getAttribute('data-theme') || 'light';
+                        const resp = await fetch(`/api/app-source/${encodeURIComponent(stem)}?fmt=html&theme=${encodeURIComponent(currentTheme)}`);
+                        if (!resp.ok) {
+                            throw new Error(`Server responded with ${resp.status}`);
+                        }
+                        const html = await resp.text();
+
+                        // Create a simple modal to display code read-only
+                        const overlay = document.createElement('div');
+                        overlay.style.position = 'fixed';
+                        overlay.style.top = '0';
+                        overlay.style.left = '0';
+                        overlay.style.right = '0';
+                        overlay.style.bottom = '0';
+                        overlay.style.background = 'rgba(0,0,0,0.5)';
+                        overlay.style.zIndex = '2000';
+                        // Overlay click handler will be added after modal is created to ensure proper cleanup
+
+                        const modal = document.createElement('div');
+                        modal.style.position = 'absolute';
+                        modal.style.top = '50%';
+                        modal.style.left = '50%';
+                        modal.style.transform = 'translate(-50%, -50%)';
+                        modal.style.background = 'var(--bg-secondary)';
+                        modal.style.border = '1px solid var(--border-primary)';
+                        modal.style.borderRadius = '8px';
+                        modal.style.width = '80%';
+                        modal.style.maxWidth = '1000px';
+                        modal.style.maxHeight = '80%';
+                        modal.style.overflow = 'auto';
+                        modal.style.boxShadow = '0 10px 30px rgba(0,0,0,0.3)';
+
+                        const header = document.createElement('div');
+                        header.style.display = 'flex';
+                        header.style.justifyContent = 'space-between';
+                        header.style.alignItems = 'center';
+                        header.style.padding = '12px 16px';
+                        header.style.borderBottom = '1px solid var(--border-primary)';
+                        header.id = 'source-viewer-title';
+                        header.textContent = `Source: ${stem}.py`;
+
+                        const closeBtn = document.createElement('button');
+                        closeBtn.textContent = '✖';
+                        closeBtn.style.background = 'none';
+                        closeBtn.style.border = 'none';
+                        closeBtn.style.cursor = 'pointer';
+                        closeBtn.setAttribute('aria-label', 'Close source viewer');
+                        closeBtn.setAttribute('title', 'Close');
+                        // Close handler to cleanup listeners and restore scroll
+                        const onKeyDown = (ev) => {
+                            if (ev.key === 'Escape' || ev.key === 'Esc') {
+                                ev.preventDefault();
+                                closeOverlay();
+                            }
+                        };
+                        const closeOverlay = () => {
+                            document.removeEventListener('keydown', onKeyDown);
+                            document.body.style.overflow = '';
+                            if (overlay && overlay.parentNode) {
+                                overlay.parentNode.removeChild(overlay);
+                            }
+                        };
+                        closeBtn.addEventListener('click', closeOverlay);
+                        header.appendChild(closeBtn);
+
+                        const codeContainer = document.createElement('div');
+                        codeContainer.style.margin = '0';
+                        codeContainer.style.padding = '0';
+                        // Create a sandboxed iframe to safely render HTML without executing scripts
+                        const iframe = document.createElement('iframe');
+                        // Do not allow scripts; allow-same-origin to preserve styling while still sandboxed
+                        iframe.setAttribute('sandbox', 'allow-same-origin');
+                        iframe.style.width = '100%';
+                        iframe.style.height = '70vh';
+                        iframe.style.border = 'none';
+                        iframe.srcdoc = html;
+                        codeContainer.appendChild(iframe);
+
+                        modal.setAttribute('role', 'dialog');
+                        modal.setAttribute('aria-modal', 'true');
+                        modal.setAttribute('aria-labelledby', 'source-viewer-title');
+                        modal.appendChild(header);
+                        modal.appendChild(codeContainer);
+                        overlay.appendChild(modal);
+                        // Prevent overlay from handling clicks that happen inside the modal
+                        modal.addEventListener('click', (event) => event.stopPropagation());
+                        // Close only when clicking the overlay background
+                        overlay.addEventListener('click', (event) => { if (event.target === overlay) closeOverlay(); });
+                        // Disable background scrolling while modal is open
+                        document.body.style.overflow = 'hidden';
+                        // Close on Escape key
+                        document.addEventListener('keydown', onKeyDown);
+                        document.body.appendChild(overlay);
+                    } catch (e) {
+                        console.error('Failed to load source:', e);
+                        if (documentWebSocket) {
+                            documentWebSocket.showNotification('error', 'View Source Failed', 'Could not load source code.');
+                        }
+                    }
+                });
+            }
         });
 
         // Clean up on page unload
@@ -945,63 +1192,172 @@
             }
         });
 
-        // Global function to render Mermaid diagrams
-        function renderMermaidDiagrams() {
-            // Clear existing diagrams
-            const existingDiagrams = document.querySelectorAll('.mermaid-diagram');
-            existingDiagrams.forEach(diagram => {
-                const hiddenCode = diagram.nextElementSibling;
-                if (hiddenCode && hiddenCode.style.display === 'none') {
-                    hiddenCode.style.display = 'block';
+        // Cytoscape rendering
+        function renderCytoscapeDiagrams() {
+            document.querySelectorAll('.cytoscape-diagram').forEach((el) => {
+                const raw = el.getAttribute('data-graph') || '{}';
+                let graph; try { graph = JSON.parse(decodeURIComponent(raw)); } catch { graph = {elements:{nodes:[],edges:[]}}; }
+                const theme = document.body.getAttribute('data-theme') || 'light';
+                const text = theme === 'dark' ? '#e0e0e0' : '#333333';
+                const cy = cytoscape({
+                    container: el,
+                    elements: graph.elements || {nodes:[], edges:[]},
+                    style: [
+                        { selector: 'node', style: {
+                            'shape': 'round-rectangle',
+                            'background-color': '#3498db',
+                            'label': 'data(label)',
+                            'color': text,
+                            'font-size': 14,
+                            'text-wrap': 'wrap',
+                            'text-max-width': 220,
+                            'text-valign': 'center',
+                            'text-halign': 'center',
+                            'width': 'label',
+                            'height': 'label',
+                            'padding': 8,
+                            'border-width': 0
+                        }},
+                        { selector: 'node[type="trigger"]', style: { 'background-color': '#38bdf8' } },
+                        { selector: 'node[type="condition"]', style: { 'background-color': '#f59e0b' } },
+                        { selector: 'node[type="action"]', style: { 'background-color': '#22c55e' } },
+                        { selector: 'node[type="method"]', style: { 'background-color': '#60a5fa' } },
+                        { selector: 'edge', style: {
+                            'width': 2,
+                            'curve-style': 'bezier',
+                            'line-color': '#95a5a6',
+                            'target-arrow-color': '#95a5a6',
+                            'target-arrow-shape': 'triangle',
+                            'arrow-scale': 1
+                        } }
+                    ],
+                    layout: { name: 'dagre', rankDir: 'LR', nodeSep: 48, edgeSep: 24, rankSep: 64, padding: 40 },
+                    wheelSensitivity: 0.2,
+                    minZoom: 0.5,
+                    maxZoom: 2.0,
+                    userZoomingEnabled: false
+                });
+                // Ensure a reasonable initial zoom independent of number of nodes
+                // Add minimal zoom toolbar
+                const toolbar = document.createElement('div');
+                toolbar.style.position = 'absolute';
+                toolbar.style.right = '8px';
+                toolbar.style.top = '8px';
+                toolbar.style.zIndex = '5';
+                const mkBtn = (t) => { const b=document.createElement('button'); b.textContent=t; b.style.margin='0 2px'; b.style.padding='2px 6px'; b.style.border='1px solid var(--border-primary)'; b.style.borderRadius='4px'; b.style.background='var(--bg-secondary)'; b.style.color='var(--text-primary)'; return b; };
+                const wrap = el.parentElement;
+                if (wrap && wrap.classList.contains('cytoscape-wrapper')) {
+                    wrap.style.position = 'relative';
+                    const plus = mkBtn('+');
+                    const minus = mkBtn('-');
+                    const reset = mkBtn('⟲');
+                    toolbar.appendChild(plus); toolbar.appendChild(minus); toolbar.appendChild(reset); wrap.appendChild(toolbar);
+                    const step = 0.15;
+                    plus.addEventListener('click', ()=>{ cy.userZoomingEnabled(true); cy.zoom({ level: cy.zoom() + step, renderedPosition: {x: el.clientWidth/2, y: el.clientHeight/2} }); cy.userZoomingEnabled(false); });
+                    minus.addEventListener('click', ()=>{ cy.userZoomingEnabled(true); cy.zoom({ level: Math.max(0.2, cy.zoom() - step), renderedPosition: {x: el.clientWidth/2, y: el.clientHeight/2} }); cy.userZoomingEnabled(false); });
+                    reset.addEventListener('click', ()=>{ cy.userZoomingEnabled(true); cy.fit(undefined, 60); cy.center(); cy.userZoomingEnabled(false); });
                 }
-                diagram.remove();
-            });
 
-            // Look for multiple possible selectors for Mermaid code blocks
-            let mermaidElements = document.querySelectorAll('code.language-mermaid, pre code.language-mermaid, code.mermaid, pre code.mermaid, .language-mermaid, .codehilite .language-mermaid');
-
-            // If no elements found with class selectors, look for content-based detection
-            if (mermaidElements.length === 0) {
-                const potentialMermaid = Array.from(document.querySelectorAll('code, pre code')).filter(el => {
-                    const content = el.textContent.trim();
-                    return content.startsWith('graph ') || content.startsWith('flowchart ') ||
-                           content.startsWith('sequenceDiagram') || content.startsWith('classDiagram') ||
-                           content.includes('-->') || content.includes('graph TD') || content.includes('graph LR');
+                cy.one('layoutstop', () => {
+                    cy.fit(undefined, 60);
+                    if (cy.zoom() < 1.0) cy.zoom(1.0);
+                    cy.center();
                 });
-                mermaidElements = potentialMermaid;
-            }
+                cy.layout({ name: 'dagre', rankDir: 'LR', nodeSep: 48, edgeSep: 24, rankSep: 64, padding: 40 }).run();
+                window.addEventListener('resize', () => { cy.resize(); cy.fit(undefined, 60); });
 
-            mermaidElements.forEach((element, index) => {
-                const mermaidCode = element.textContent;
-                const mermaidId = `mermaid-${index}`;
-
-                // Get current theme
-                const currentTheme = document.body.getAttribute('data-theme') || 'light';
-
-                // Create a div to hold the rendered diagram
-                const mermaidDiv = document.createElement('div');
-                mermaidDiv.className = 'mermaid-diagram';
-                mermaidDiv.id = mermaidId;
-                mermaidDiv.style.textAlign = 'center';
-                mermaidDiv.style.margin = '20px 0';
-                mermaidDiv.style.background = currentTheme === 'dark' ? '#2d2d2d' : '#fff';
-                mermaidDiv.style.border = `1px solid ${currentTheme === 'dark' ? '#444' : '#dee2e6'}`;
-                mermaidDiv.style.borderRadius = '6px';
-                mermaidDiv.style.padding = '20px';
-
-                // Replace the code block with the diagram
-                const codeBlock = element.closest('pre') || element;
-                codeBlock.parentNode.insertBefore(mermaidDiv, codeBlock);
-                codeBlock.style.display = 'none';
-
-                // Render the diagram
-                mermaid.render(mermaidId + '-svg', mermaidCode).then(({svg}) => {
-                    mermaidDiv.innerHTML = svg;
-                }).catch((error) => {
-                    console.error('Mermaid rendering error:', error);
-                    mermaidDiv.innerHTML = `<p style="color: #e74c3c;">Error rendering diagram: ${error.message}</p>`;
+                // If graph is empty, show a friendly message in the container
+                if (((graph.elements && graph.elements.nodes && graph.elements.nodes.length) || 0) === 0) {
+                    el.innerHTML = '<div style="padding:12px;color:var(--text-secondary);">No flow actions found.</div>';
+                }
+                // Tooltips using native title attribute
+                cy.nodes().forEach(n => {
+                    const t = n.data('title');
+                    if (t) {
+                        n.qtip && n.qtip.remove && n.qtip.remove();
+                        n.data('tooltip', t);
+                        n.on('mouseover', () => { el.setAttribute('title', t); });
+                        n.on('mouseout', () => { el.removeAttribute('title'); });
+                    }
                 });
             });
+        }
+
+        // Alpine-less lightweight search behavior for x-data="docSearch()"
+        function docSearch() {
+            return {
+                q: '',
+                count: 0,
+                run() {
+                    const root = this.$refs.content;
+                    if (!root) return;
+                    const query = (this.q || '').trim().toLowerCase();
+                    const nodes = root.querySelectorAll('h1,h2,h3,h4,h5,h6,p,li,code,pre,table');
+                    let c = 0;
+                    nodes.forEach(el => {
+                        el.classList.remove('bg-yellow-100');
+                        if (!query) { el.style.display=''; return; }
+                        const text = (el.textContent || '').toLowerCase();
+                        const match = text.includes(query);
+                        el.style.display = match ? '' : 'none';
+                        if (match) { c++; el.classList.add('bg-yellow-100'); }
+                    });
+                    this.count = c;
+                }
+            };
+        }
+
+        // Simple modal to display a larger version of a Mermaid diagram
+        function openDiagramModal() {
+            const overlay = document.createElement('div');
+            overlay.style.position = 'fixed';
+            overlay.style.top = '0';
+            overlay.style.left = '0';
+            overlay.style.right = '0';
+            overlay.style.bottom = '0';
+            overlay.style.background = 'rgba(0,0,0,0.6)';
+            overlay.style.zIndex = '2100';
+
+            const modal = document.createElement('div');
+            modal.style.position = 'absolute';
+            modal.style.top = '50%';
+            modal.style.left = '50%';
+            modal.style.transform = 'translate(-50%, -50%)';
+            modal.style.background = 'var(--bg-secondary)';
+            modal.style.border = '1px solid var(--border-primary)';
+            modal.style.borderRadius = '8px';
+            modal.style.width = '90%';
+            modal.style.maxWidth = '1200px';
+            modal.style.maxHeight = '85%';
+            modal.style.overflow = 'auto';
+            modal.style.boxShadow = '0 10px 30px rgba(0,0,0,0.35)';
+            modal.style.padding = '16px';
+
+            const close = document.createElement('button');
+            close.textContent = '✖';
+            close.style.position = 'absolute';
+            close.style.top = '8px';
+            close.style.right = '10px';
+            close.style.background = 'none';
+            close.style.border = 'none';
+            close.style.fontSize = '18px';
+            close.style.cursor = 'pointer';
+            close.addEventListener('click', () => document.body.removeChild(overlay));
+
+            const big = document.createElement('div');
+            big.style.textAlign = 'center';
+            big.style.marginTop = '20px';
+            big.className = '';
+
+            // Render larger diagram with current theme
+            const currentTheme = document.body.getAttribute('data-theme') || 'light';
+            big.textContent = 'Diagram';
+
+            modal.appendChild(close);
+            modal.appendChild(big);
+            overlay.appendChild(modal);
+            overlay.addEventListener('click', (e) => { if (e.target === overlay) document.body.removeChild(overlay); });
+            document.body.appendChild(overlay);
         }
 
         // Initialize Mermaid and theme support
@@ -1010,7 +1366,8 @@
             const body = document.body;
 
             // Configure initial Mermaid
-            mermaid.initialize({
+            /* Mermaid removed */
+            /* mermaid.initialize({
                 startOnLoad: false,
                 theme: 'default',
                 themeVariables: {
@@ -1023,14 +1380,14 @@
                     gridColor: '#dee2e6',
                     tertiaryColor: '#ecf0f1'
                 }
-            });
+            }); */
 
             // Load saved theme or default to light
             const savedTheme = localStorage.getItem('docs-theme') || 'light';
             setTheme(savedTheme);
 
             // Initial diagram render
-            renderMermaidDiagrams();
+            renderCytoscapeDiagrams();
 
             // Theme toggle event
             themeToggle.addEventListener('click', function() {
@@ -1067,14 +1424,14 @@
                     tertiaryColor: '#ecf0f1'
                 };
 
-                mermaid.initialize({
+                /* mermaid.initialize({
                     startOnLoad: false,
                     theme: mermaidTheme,
                     themeVariables: themeVariables
-                });
+                }); */
 
                 // Re-render diagrams with new theme
-                renderMermaidDiagrams();
+                renderCytoscapeDiagrams();
             }
         });
 

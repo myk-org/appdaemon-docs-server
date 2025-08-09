@@ -27,7 +27,7 @@ def mock_env():
         yield
 
 
-class TestMainApplication:
+class TestMainApiEndpoints:
     """Test cases for the main FastAPI application."""
 
     @pytest.fixture
@@ -390,7 +390,7 @@ class TestMainApplication:
                 assert data["total_connections"] == 2
 
 
-class TestStartupFunctions:
+class TestStartupLifecycle:
     """Test startup and utility functions."""
 
     @pytest.fixture
@@ -567,9 +567,4 @@ class TestStartupFunctions:
         assert server.main.markdown_processor is not None
         assert server.main.docs_service is not None
 
-    @pytest.mark.skip(reason="Module reloading in test environment is complex, error handling verified manually")
-    def test_missing_apps_dir_env_var(self):
-        """Test that missing APPS_DIR environment variable raises error."""
-        # This test is skipped because module reloading in pytest is complex
-        # The error handling is verified to work in the actual code at line 56 of main.py
-        pass
+    # Removed: test that required reloading module to simulate missing APPS_DIR
