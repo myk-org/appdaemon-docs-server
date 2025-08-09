@@ -106,7 +106,7 @@ class TestMarkdownProcessor:
 
     def test_process_file_not_found(self, processor):
         """Test processing non-existent file raises appropriate error."""
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(ValueError, match="Cannot access file"):
             processor.process_file("/nonexistent/file.md", 123)
 
     def test_process_file_permission_error(self, processor):
@@ -170,7 +170,7 @@ class TestMarkdownProcessor:
     def test_process_file_logging_on_error(self, processor):
         """Test that errors are properly logged."""
         with patch("server.processors.markdown.logger") as mock_logger:
-            with pytest.raises(FileNotFoundError):
+            with pytest.raises(ValueError, match="Cannot access file"):
                 processor.process_file("/nonexistent/file.md", 123)
 
             mock_logger.error.assert_called_once()
