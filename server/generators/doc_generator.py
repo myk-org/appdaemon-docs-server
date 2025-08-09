@@ -533,13 +533,13 @@ class AppDaemonDocGenerator:
                 # Prepend triggers
                 triggers = []
                 for cls in parsed_file.classes:
-                    for l in cls.state_listeners:
-                        if l.callback_method == method.name:
+                    for listener in cls.state_listeners:
+                        if listener.callback_method == method.name:
                             parts = []
-                            if l.entity:
-                                parts.append(self._resolve_entity(l.entity, parsed_file))
-                            if l.old_state or l.new_state:
-                                parts.append(f"{l.old_state or '*'}→{l.new_state or '*'}")
+                            if listener.entity:
+                                parts.append(self._resolve_entity(listener.entity, parsed_file))
+                            if listener.old_state or listener.new_state:
+                                parts.append(f"{listener.old_state or '*'}→{listener.new_state or '*'}")
                             label = " | ".join(parts) if parts else "State change"
                             if label and label not in triggers:
                                 triggers.append(label)
@@ -567,15 +567,15 @@ class AppDaemonDocGenerator:
             # Triggers from state listeners
             triggers = []
             for cls in parsed_file.classes:
-                for l in cls.state_listeners:
-                    if l.callback_method == method.name:
+                for listener in cls.state_listeners:
+                    if listener.callback_method == method.name:
                         parts = []
-                        if l.entity:
-                            parts.append(self._resolve_entity(l.entity, parsed_file))
-                        if l.old_state or l.new_state:
-                            parts.append(f"{l.old_state or '*'}→{l.new_state or '*'}")
-                        if l.duration:
-                            parts.append(f"after {l.duration}s")
+                        if listener.entity:
+                            parts.append(self._resolve_entity(listener.entity, parsed_file))
+                        if listener.old_state or listener.new_state:
+                            parts.append(f"{listener.old_state or '*'}→{listener.new_state or '*'}")
+                        if listener.duration:
+                            parts.append(f"after {listener.duration}s")
                         label = " | ".join(parts) if parts else "State change"
                         if label and label not in triggers:
                             triggers.append(label)
@@ -681,9 +681,9 @@ class AppDaemonDocGenerator:
         # Entities touched
         entities: set[str] = set()
         for c in parsed_file.classes:
-            for l in c.state_listeners:
-                if l.entity:
-                    entities.add(self._resolve_entity(l.entity, parsed_file))
+            for listener in c.state_listeners:
+                if listener.entity:
+                    entities.add(self._resolve_entity(listener.entity, parsed_file))
             for s in c.service_calls:
                 if s.entity_id:
                     entities.add(self._resolve_entity(s.entity_id, parsed_file))
@@ -712,14 +712,14 @@ class AppDaemonDocGenerator:
         lines.append(f"Entity | Transition | Duration | Callback | {self._t('source')}")
         lines.append("---|---|---|---|---")
         for c in parsed_file.classes:
-            for l in c.state_listeners:
-                ent = self._resolve_entity(l.entity, parsed_file) if l.entity else ""
+            for listener in c.state_listeners:
+                ent = self._resolve_entity(listener.entity, parsed_file) if listener.entity else ""
                 trans = ""
-                if l.old_state or l.new_state:
-                    trans = f"{l.old_state or '*'} → {l.new_state or '*'}"
-                dur = str(l.duration) if l.duration is not None else ""
-                cb = l.callback_method or ""
-                src = self._source_link(parsed_file.file_path, l.line_number)
+                if listener.old_state or listener.new_state:
+                    trans = f"{listener.old_state or '*'} → {listener.new_state or '*'}"
+                dur = str(listener.duration) if listener.duration is not None else ""
+                cb = listener.callback_method or ""
+                src = self._source_link(parsed_file.file_path, listener.line_number)
                 lines.append(f"`{ent}` | `{trans}` | `{dur}` | `{cb}` | {src}")
         lines.append("")
 
@@ -774,9 +774,9 @@ class AppDaemonDocGenerator:
 
         for c in parsed_file.classes:
             # Reads
-            for l in c.state_listeners:
-                if l.entity:
-                    reads.add(self._resolve_entity(l.entity, parsed_file))
+            for listener in c.state_listeners:
+                if listener.entity:
+                    reads.add(self._resolve_entity(listener.entity, parsed_file))
             for f in c.automation_flows:
                 for e in f.entities_involved:
                     reads.add(self._resolve_entity(e, parsed_file))

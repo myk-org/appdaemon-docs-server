@@ -145,7 +145,7 @@ class DebounceHandler:
         self._timer_tasks.clear()
 
 
-class FileWatchEventHandler(FileSystemEventHandler):
+class FileWatchEventHandler(FileSystemEventHandler):  # type: ignore[misc]
     """Handles file system events for the watcher."""
 
     def __init__(self, watcher: "FileWatcher"):

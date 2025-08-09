@@ -710,17 +710,17 @@ async def get_app_source_raw(module: str) -> AppSourceContentResponse:
         raise HTTPException(status_code=500, detail="Error reading app source") from e
 
 
-@app.get("/partials/app-sources", response_class=HTMLResponse)
+@app.get("/partials/app-sources", response_class=HTMLResponse)  # type: ignore[misc]
 async def partial_app_sources() -> HTMLResponse:
     """Return HTML fragment listing configured app sources (for HTMX)."""
     try:
-        items: list[str] = []
         active_modules = set()
         try:
             files = await docs_service.get_file_list()
             doc_stems = [str(file.get("stem", Path(str(file["name"])).stem)) for file in files]
             app_counts = count_active_apps(REAL_APPS_DIR, doc_stems=doc_stems)
-            active_modules = set(app_counts.get("active_modules", []))
+            active_modules_value = app_counts.get("active_modules", [])
+            active_modules = set(active_modules_value if isinstance(active_modules_value, list) else [])
         except Exception:
             active_modules = set()
 
@@ -775,7 +775,8 @@ async def documentation_index(request: Request) -> HTMLResponse:
         # Filter to only apps configured in apps.yaml (read from real apps dir)
         doc_stems = [str(file.get("stem", Path(str(file["name"])).stem)) for file in files]
         app_counts = count_active_apps(REAL_APPS_DIR, doc_stems=doc_stems)
-        active_modules = set(app_counts.get("active_modules", []))
+        active_modules_value = app_counts.get("active_modules", [])
+        active_modules = set(active_modules_value if isinstance(active_modules_value, list) else [])
         files = [f for f in files if str(f.get("stem")) in active_modules]
 
         return templates.TemplateResponse(
