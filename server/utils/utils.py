@@ -181,6 +181,7 @@ def get_environment_config() -> dict[str, Any]:
         "watch_max_retries": int(os.getenv("WATCH_MAX_RETRIES", "3")),
         "watch_force_regenerate": parse_boolean_env("WATCH_FORCE_REGENERATE"),
         "watch_log_level": os.getenv("WATCH_LOG_LEVEL", "INFO"),
+        "markdown_cache_size": int(os.getenv("MARKDOWN_CACHE_SIZE", "128")),
     }
 
 
@@ -315,6 +316,7 @@ def print_startup_info(
     print(f"  FORCE_REGENERATE={env_config['force_regenerate']}")
     print(f"  ENABLE_FILE_WATCHER={env_config['enable_file_watcher']}")
     print(f"  WATCH_DEBOUNCE_DELAY={env_config['watch_debounce_delay']}")
+    print(f"  MARKDOWN_CACHE_SIZE={env_config['markdown_cache_size']}")
     print()
 
     # Directory status section

@@ -39,15 +39,40 @@ MARKDOWN_EXTENSION_CONFIGS = {
 class MarkdownProcessor:
     """High-performance markdown processor with caching."""
 
-    def __init__(self) -> None:
-        """Initialize markdown processor with optimized configuration."""
+    def __init__(self, cache_size: int | None = None) -> None:
+        """
+        Initialize markdown processor with optimized configuration.
+
+        Args:
+            cache_size: Maximum number of entries in the LRU cache.
+                       If None, uses MARKDOWN_CACHE_SIZE environment variable
+                       or defaults to 128.
+        """
         self.md = markdown.Markdown(
             extensions=MARKDOWN_EXTENSIONS,
             extension_configs=MARKDOWN_EXTENSION_CONFIGS,
         )
         # LRU cache implemented with OrderedDict for O(1) updates and eviction
         self._cache: OrderedDict[tuple[str, int], str] = OrderedDict()
-        self._max_cache_size = 128
+
+        # Configure cache size from parameter, environment variable, or default
+        if cache_size is not None:
+            self._max_cache_size = cache_size
+        else:
+            env_cache_size = os.environ.get("MARKDOWN_CACHE_SIZE")
+            if env_cache_size is not None:
+                try:
+                    self._max_cache_size = int(env_cache_size)
+                    if self._max_cache_size <= 0:
+                        raise ValueError("Cache size must be positive")
+                except ValueError as e:
+                    logger.warning(f"Invalid MARKDOWN_CACHE_SIZE value '{env_cache_size}': {e}. Using default 128.")
+                    self._max_cache_size = 128
+            else:
+                self._max_cache_size = 128
+
+        logger.debug(f"MarkdownProcessor initialized with cache size: {self._max_cache_size}")
+
         # Synchronization for thread-safe processing and cache access
         self._lock = threading.Lock()
 
@@ -74,7 +99,8 @@ class MarkdownProcessor:
 
             # Check file size before reading to prevent DoS attacks
             try:
-                file_size = os.path.getsize(file_path)
+                file_stat = os.stat(file_path)
+                file_size = file_stat.st_size
                 if file_size > MAX_FILE_SIZE_BYTES:
                     raise ValueError(f"File {file_path} is too large ({file_size} bytes, max {MAX_FILE_SIZE_BYTES})")
             except OSError as e:

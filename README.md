@@ -143,8 +143,11 @@ All configuration is handled through environment variables:
 | `WATCH_FORCE_REGENERATE` | `false`  | Force regenerate on file changes                |
 | `WATCH_LOG_LEVEL`      | `INFO`     | File watcher log level                           |
 | `RECURSIVE_SCAN`       | `false`    | Scan and watch nested subdirectories for .py files |
+| `MARKDOWN_CACHE_SIZE`  | `128`      | Maximum number of markdown files to cache in memory |
 | `APP_TITLE`            | `AppDaemon Documentation Server` | Application title |
 | `APP_DESCRIPTION`      | `Web interface for AppDaemon...` | Application description |
+| `APP_ENV`              | `production` | Runtime environment (production/development/dev/debug) |
+| `EXPOSE_ABS_PATHS_IN_API` | `false` | Include absolute filesystem paths in API responses (requires APP_ENV=development) |
 
 ## How It Works
 
@@ -367,6 +370,7 @@ environment:
   - WATCH_DEBOUNCE_DELAY=5.0     # Reduce CPU usage during file changes
   - FORCE_REGENERATE=false       # Faster startup times
   - LOG_LEVEL=warning            # Reduce log verbosity
+  - MARKDOWN_CACHE_SIZE=256      # Increase cache for better performance with large doc sets
 ```
 
 ## Security Considerations
@@ -379,6 +383,11 @@ environment:
   - Unrestricted filesystem access outside the repository
   - Read-only vs read-write mount status
   - Security implications of external path usage
+- **Absolute Path Exposure** - Filesystem paths are protected in production environments:
+  - Set `EXPOSE_ABS_PATHS_IN_API=true` to include absolute paths in API responses
+  - Requires `APP_ENV=development` (or `dev`/`debug`) to prevent production path leakage
+  - Production environments (default `APP_ENV=production`) block absolute path exposure regardless of the EXPOSE_ABS_PATHS_IN_API setting
+  - This prevents potential information disclosure about server filesystem structure
 
 ## Troubleshooting
 

@@ -173,8 +173,10 @@ class WebSocketManager:
         stale_connections = set()
         for websocket in self._connections.copy():
             try:
-                # Try to ping the connection to check if it's alive (with timeout)
-                await asyncio.wait_for(websocket.ping(), timeout=5.0)
+                # Try to send a lightweight ping message to check if connection is alive
+                # Starlette WebSocket doesn't have ping(), so we use send_json instead
+                ping_message = {"type": "ping", "timestamp": time.time()}
+                await asyncio.wait_for(websocket.send_json(ping_message), timeout=5.0)
             except Exception:
                 # Connection is stale, mark for removal
                 stale_connections.add(websocket)
@@ -265,6 +267,9 @@ class WebSocketManager:
         if successful_sends > 0:
             self.stats["events_sent"] += successful_sends
             self.logger.debug(f"Broadcast event {event.event_type.value} to {successful_sends} clients")
+
+        # Increment event count for each broadcast (regardless of successful sends)
+        self._event_count += 1
 
         # Also publish to SSE subscribers regardless of WebSocket clients
         try:

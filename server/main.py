@@ -8,6 +8,7 @@ markdown rendering, syntax highlighting, and responsive UI.
 import asyncio
 import logging
 import os
+import re
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -56,7 +57,8 @@ logger = logging.getLogger(__name__)
 def validate_safe_path(user_input: str, base_dir: Path) -> Path | None:
     """Validate that user input results in a safe path within base_dir.
 
-    Prevents path traversal attacks by ensuring the resolved path is within base_dir.
+    Prevents path traversal attacks by using strict regex validation.
+    Only allows alphanumeric characters and underscores in filenames.
 
     Args:
         user_input: User-provided filename/path
@@ -66,20 +68,21 @@ def validate_safe_path(user_input: str, base_dir: Path) -> Path | None:
         Safe path if valid, None if potentially malicious
     """
     try:
-        # Sanitize basic characters but rely on path resolution for security
-        sanitized = user_input.replace("..", "").replace("/", "").replace("\\", "")
-        if not sanitized or sanitized != user_input.replace("..", "").replace("/", "").replace("\\", ""):
-            # User input contained path traversal attempts
+        # Strict validation: only allow alphanumeric characters and underscores
+        # This prevents all forms of path traversal including encoded attacks
+        if not re.match(r"^[A-Za-z0-9_]+$", user_input):
+            logger.warning(f"Invalid path input rejected: {user_input!r}")
             return None
 
-        # Resolve to absolute path and check it's within base_dir
-        safe_path = (base_dir / sanitized).resolve()
+        # Construct and resolve path within base directory
+        safe_path = (base_dir / user_input).resolve()
         base_dir_resolved = base_dir.resolve()
 
         # Ensure the path is within the base directory
         safe_path.relative_to(base_dir_resolved)
         return safe_path
-    except (ValueError, OSError):
+    except (ValueError, OSError) as e:
+        logger.warning(f"Path validation error for {user_input!r}: {e}")
         return None
 
 
@@ -174,12 +177,19 @@ TEMPLATES_DIR = Path(os.getenv("TEMPLATES_DIR", "server/templates")).resolve()
 STATIC_DIR = Path(os.getenv("STATIC_DIR", "server/static")).resolve()
 
 # Security: control exposure of absolute filesystem paths via API
-EXPOSE_ABS_PATHS_IN_API: bool = os.getenv("EXPOSE_ABS_PATHS_IN_API", "false").lower() in {
+# Only allow in development environments to prevent production path leakage
+_expose_paths_env = os.getenv("EXPOSE_ABS_PATHS_IN_API", "false").lower() in {
     "1",
     "true",
     "yes",
     "on",
 }
+_is_development_env = os.getenv("APP_ENV", "production").lower() in {
+    "development",
+    "dev",
+    "debug",
+}
+EXPOSE_ABS_PATHS_IN_API: bool = _expose_paths_env and _is_development_env
 
 # Global components for startup integration
 file_watcher: FileWatcher | None = None
@@ -866,19 +876,22 @@ async def partial_app_sources() -> HTMLResponse:
         apps.sort(key=lambda x: x[1])
 
         # Simple HTML list fragment
-        html = [
+        html_parts = [
             '<div class="p-2">',
             '<div class="text-sm text-gray-500 mb-2">Configured Apps</div>',
             '<ul class="divide-y divide-gray-200">',
         ]
         for mod, rel, size_kb in apps:
-            html.append(
-                f'<li class="py-2"><button class="text-left w-full hover:underline" onclick="window.openSourceViewer(\'{mod}\')"><strong>{mod}.py</strong><div class="text-xs text-gray-500">{rel} • {size_kb} KB</div></button></li>'
+            # Escape HTML content to prevent XSS attacks
+            escaped_mod = html.escape(mod)
+            escaped_rel = html.escape(rel)
+            html_parts.append(
+                f'<li class="py-2"><button class="text-left w-full hover:underline" onclick="window.openSourceViewer(\'{escaped_mod}\')"><strong>{escaped_mod}.py</strong><div class="text-xs text-gray-500">{escaped_rel} • {size_kb} KB</div></button></li>'
             )
         if not apps:
-            html.append('<li class="py-2 text-sm text-gray-500">No configured apps found</li>')
-        html.append("</ul></div>")
-        return HTMLResponse("".join(html))
+            html_parts.append('<li class="py-2 text-sm text-gray-500">No configured apps found</li>')
+        html_parts.append("</ul></div>")
+        return HTMLResponse("".join(html_parts))
     except Exception as e:
         logger.error(f"Error rendering app sources partial: {e}")
         raise HTTPException(status_code=500, detail="Error rendering partial") from e
