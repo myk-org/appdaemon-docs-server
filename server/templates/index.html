@@ -5,6 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ title }}</title>
     <link href="/api/css/pygments.css" rel="stylesheet">
+    <!-- Tailwind CSS (CDN) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- HTMX (CDN) -->
+    <script src="https://unpkg.com/htmx.org@1.9.11" integrity="sha384-9AoZ0R6KzF5W4a4s5WZ0qB7iA4C6Z8fM6wH8FzO1k5cR6s3bD1g3QwYxgqZp6u2r" crossorigin="anonymous"></script> <!-- pragma: allowlist secret -->
+    <!-- Alpine.js (CDN) -->
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <style>
         /* CSS Reset and Normalization for Cross-Browser Consistency */
         *, *::before, *::after {
@@ -741,7 +747,7 @@
         }
     </style>
 </head>
-<body>
+<body hx-boost="true">
     <button class="theme-toggle" id="themeToggle" title="Toggle Dark/Light Theme">🌙</button>
 
     <!-- WebSocket Status Indicator -->
@@ -774,26 +780,17 @@
 
         <div class="view-controls">
             <div class="stats">
-                <strong>{{ total_files }}</strong> documentation files available
-                {% if app_counts %}
-                <br>
-                <span style="color: var(--text-secondary); font-size: 0.9em;">
-                    <button id="filterActive" class="filter-button" data-filter="active" title="Filter by active apps">
-                        {{ app_counts.active }} active
-                    </button>,
-                    <button id="filterInactive" class="filter-button" data-filter="inactive" title="Filter by inactive apps">
-                        {{ app_counts.inactive }} inactive
-                    </button> apps
-                    <button id="clearFilter" class="filter-button clear-filter" data-filter="all" title="Show all apps" style="display: none;">
-                        Clear filter
-                    </button>
-                </span>
-                {% endif %}
+                <strong>{{ total_files }}</strong> apps configured
             </div>
             <div style="display: flex; gap: 10px; align-items: center;">
-                <button id="regenerateAllBtn" class="regenerate-button" title="Regenerate All Documentation">
+                <button id="regenerateAllBtn" class="regenerate-button" title="Regenerate All Documentation"
+                        hx-post="/api/generate/all?force=true" hx-swap="none">
                     <div class="spinner"></div>
                     🔄 Regenerate All
+                </button>
+                <button id="browseAppsBtn" class="regenerate-button" title="Browse App Source Files"
+                        hx-get="/partials/app-sources" hx-target="#overlayContent" hx-swap="innerHTML">
+                    📂 Browse Apps
                 </button>
                 <div class="view-toggle">
                     <button id="gridView" class="active" title="Grid View">📱 Grid</button>
@@ -838,48 +835,35 @@
         {% endif %}
     </div>
 
+    <!-- Overlay container for HTMX partials -->
+    <div id="overlay" style="display:none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index:2000;">
+        <div role="dialog" aria-modal="true" style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); background: var(--bg-secondary); border:1px solid var(--border-primary); border-radius:8px; width:80%; max-width:900px; max-height:80%; overflow:auto;">
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-bottom:1px solid var(--border-primary);">
+                <strong>Browse App Sources</strong>
+                <button id="overlayClose" style="background:none; border:none; cursor:pointer;">✖</button>
+            </div>
+            <div id="overlayContent" class="p-2"></div>
+        </div>
+    </div>
+
     <script>
         // App filtering data
-        const appCounts = {{ app_counts | tojson | safe }};
-        console.log('App counts:', appCounts);
+        const activeModules = JSON.parse('{{ (active_modules | default(none)) | tojson | safe }}');
 
         // App filtering functionality
         function filterApps(filterType) {
             const fileCards = document.querySelectorAll('.file-card, .file-list-item');
-            const filterButtons = document.querySelectorAll('.filter-button');
-            const clearFilterBtn = document.getElementById('clearFilter');
-
-            // Remove active class from all buttons
-            filterButtons.forEach(btn => btn.classList.remove('active'));
-
-            let visibleModules = [];
-
-            if (filterType === 'active') {
-                visibleModules = appCounts.active_modules;
-                document.getElementById('filterActive').classList.add('active');
-            } else if (filterType === 'inactive') {
-                visibleModules = appCounts.inactive_modules;
-                document.getElementById('filterInactive').classList.add('active');
-            } else {
-                visibleModules = appCounts.all_modules;
-            }
+            let visibleModules = Array.isArray(activeModules) ? activeModules : [];
 
             // Show/hide cards based on filter
             fileCards.forEach(card => {
                 const module = card.dataset.module;
-                if (filterType === 'all' || visibleModules.includes(module)) {
+                if (filterType === 'all' || (Array.isArray(visibleModules) && visibleModules.includes(module))) {
                     card.style.display = '';
                 } else {
                     card.style.display = 'none';
                 }
             });
-
-            // Show/hide clear filter button
-            if (filterType === 'all') {
-                clearFilterBtn.style.display = 'none';
-            } else {
-                clearFilterBtn.style.display = 'inline-block';
-            }
 
             // Update stats if needed
             updateFilterStats(filterType);
@@ -887,13 +871,37 @@
 
         function updateFilterStats(filterType) {
             const statsElement = document.querySelector('.stats strong');
-            if (filterType === 'all') {
-                statsElement.textContent = appCounts.total;
-            } else {
-                // Count actual visible DOM cards instead of module count
-                const visibleCards = document.querySelectorAll('.file-card:not([style*="display: none"]), .file-list-item:not([style*="display: none"])');
-                statsElement.textContent = visibleCards.length;
-            }
+            if (!statsElement) return;
+
+            const grid = document.getElementById('fileGrid');
+            const list = document.getElementById('fileList');
+
+            const isElementVisible = (el) => {
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                return el.offsetParent !== null && style.display !== 'none' && style.visibility !== 'hidden';
+            };
+
+            const getActiveContainer = () => {
+                if (grid && grid.classList.contains('active') && isElementVisible(grid)) return grid;
+                if (list && list.classList.contains('active') && isElementVisible(list)) return list;
+                if (grid && isElementVisible(grid)) return grid;
+                if (list && isElementVisible(list)) return list;
+                return null;
+            };
+
+            const countVisibleChildren = (container) => {
+                if (!container) return 0;
+                const selector = container.id === 'fileGrid' ? '.file-card' : '.file-list-item';
+                return Array.from(container.querySelectorAll(selector)).filter(isElementVisible).length;
+            };
+
+            const activeContainer = getActiveContainer();
+            const visibleCount = activeContainer
+                ? countVisibleChildren(activeContainer)
+                : (countVisibleChildren(grid) + countVisibleChildren(list));
+
+            statsElement.textContent = String(visibleCount);
         }
 
         // WebSocket Real-time Updates
@@ -1134,10 +1142,6 @@
 
                     if (!data.files) return;
 
-                    // Update stats count
-                    const statsElement = document.querySelector('.stats strong');
-                    if (statsElement) statsElement.textContent = String(data.total_count);
-
                     // Update grid
                     const grid = document.getElementById('fileGrid');
                     const list = document.getElementById('fileList');
@@ -1146,11 +1150,24 @@
                         a.href = `/docs/${file.stem}`;
                         a.className = 'file-card';
                         a.dataset.module = file.stem;
-                        a.innerHTML = `
-                            <div class="file-title">${file.title}</div>
-                            <div class="file-name">${file.name}</div>
-                            <div class="file-meta">Size: ${(file.size/1024).toFixed(1)} KB</div>
-                        `;
+
+                        const titleDiv = document.createElement('div');
+                        titleDiv.className = 'file-title';
+                        titleDiv.textContent = file.title ?? '';
+
+                        const nameDiv = document.createElement('div');
+                        nameDiv.className = 'file-name';
+                        nameDiv.textContent = file.name ?? '';
+
+                        const metaDiv = document.createElement('div');
+                        metaDiv.className = 'file-meta';
+                        const sizeKb = (Number(file.size) / 1024);
+                        metaDiv.textContent = `Size: ${isFinite(sizeKb) ? sizeKb.toFixed(1) : '0.0'} KB`;
+
+                        a.appendChild(titleDiv);
+                        a.appendChild(nameDiv);
+                        a.appendChild(metaDiv);
+
                         return a;
                     };
                     const buildListItem = (file) => {
@@ -1158,13 +1175,29 @@
                         a.href = `/docs/${file.stem}`;
                         a.className = 'file-list-item';
                         a.dataset.module = file.stem;
-                        a.innerHTML = `
-                            <div class="file-list-content">
-                                <div class="file-list-title">${file.title}</div>
-                                <div class="file-list-name">${file.name}</div>
-                            </div>
-                            <div class="file-list-meta">${(file.size/1024).toFixed(1)} KB</div>
-                        `;
+
+                        const contentDiv = document.createElement('div');
+                        contentDiv.className = 'file-list-content';
+
+                        const titleDiv = document.createElement('div');
+                        titleDiv.className = 'file-list-title';
+                        titleDiv.textContent = file.title ?? '';
+
+                        const nameDiv = document.createElement('div');
+                        nameDiv.className = 'file-list-name';
+                        nameDiv.textContent = file.name ?? '';
+
+                        contentDiv.appendChild(titleDiv);
+                        contentDiv.appendChild(nameDiv);
+
+                        const metaDiv = document.createElement('div');
+                        metaDiv.className = 'file-list-meta';
+                        const sizeKb = (Number(file.size) / 1024);
+                        metaDiv.textContent = `${isFinite(sizeKb) ? sizeKb.toFixed(1) : '0.0'} KB`;
+
+                        a.appendChild(contentDiv);
+                        a.appendChild(metaDiv);
+
                         return a;
                     };
 
@@ -1177,11 +1210,8 @@
                         data.files.forEach(f => list.appendChild(buildListItem(f)));
                     }
 
-                    // Reapply current filter if any
-                    const activeFilter = document.querySelector('.filter-button.active');
-                    if (activeFilter) {
-                        filterApps(activeFilter.dataset.filter);
-                    }
+                    // Always filter to configured (active) modules and update stats accordingly
+                    filterApps('active');
                 } catch (error) {
                     console.error('Error refreshing file list:', error);
                 }
@@ -1231,60 +1261,64 @@
             docsWebSocket = new DocsWebSocket();
         });
 
-        // Regenerate all documentation functionality
+        // Regenerate all documentation functionality (prefer HTMX if available)
         document.addEventListener('DOMContentLoaded', function() {
             const regenerateAllBtn = document.getElementById('regenerateAllBtn');
+            if (!regenerateAllBtn) return;
 
-            regenerateAllBtn.addEventListener('click', async function() {
-                if (regenerateAllBtn.classList.contains('processing')) {
-                    return; // Prevent multiple clicks
-                }
-
-                try {
-                    // Update button state
+            // If HTMX is present, rely on hx-post and enhance with visual feedback hooks
+            if (window.htmx) {
+                regenerateAllBtn.addEventListener('htmx:beforeRequest', () => {
                     regenerateAllBtn.classList.add('processing');
                     regenerateAllBtn.disabled = true;
                     regenerateAllBtn.innerHTML = '<div class="spinner"></div> Regenerating...';
-
-                    // Make API call to regenerate all docs
-                    const response = await fetch('/api/generate/all?force=true', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        }
-                    });
-
+                });
+                const resetBtn = () => {
+                    setTimeout(() => {
+                        regenerateAllBtn.classList.remove('processing');
+                        regenerateAllBtn.disabled = false;
+                        regenerateAllBtn.innerHTML = '<div class="spinner"></div>🔄 Regenerate All';
+                    }, 1200);
+                };
+                regenerateAllBtn.addEventListener('htmx:afterRequest', () => {
+                    if (window.docsWebSocket) {
+                        window.docsWebSocket.showNotification('success', 'Regeneration Started', 'Documentation regeneration has been initiated.');
+                    }
+                    resetBtn();
+                });
+                regenerateAllBtn.addEventListener('htmx:responseError', () => {
+                    if (window.docsWebSocket) {
+                        window.docsWebSocket.showNotification('error', 'Regeneration Failed', 'Failed to start regeneration');
+                    }
+                    resetBtn();
+                });
+                return; // Do not attach fetch-based handler when HTMX is active
+            }
+            // Fallback to fetch (no HTMX)
+            regenerateAllBtn.addEventListener('click', async function() {
+                if (regenerateAllBtn.classList.contains('processing')) return;
+                try {
+                    regenerateAllBtn.classList.add('processing');
+                    regenerateAllBtn.disabled = true;
+                    regenerateAllBtn.innerHTML = '<div class="spinner"></div> Regenerating...';
+                    const response = await fetch('/api/generate/all?force=true', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
                     if (response.ok) {
-                        const result = await response.json();
-
-                        // Show success notification via WebSocket if available
-                        if (docsWebSocket) {
-                            docsWebSocket.showNotification('success', 'Regeneration Started', 'Documentation regeneration has been initiated. You will receive updates via WebSocket.');
+                        if (window.docsWebSocket) {
+                            window.docsWebSocket.showNotification('success', 'Regeneration Started', 'Documentation regeneration has been initiated.');
                         }
-
-                        // Reset button after a delay to show the action was registered
-                        setTimeout(() => {
-                            regenerateAllBtn.classList.remove('processing');
-                            regenerateAllBtn.disabled = false;
-                            regenerateAllBtn.innerHTML = '<div class="spinner"></div>🔄 Regenerate All';
-                        }, 2000);
-
                     } else {
-                        throw new Error(`Server responded with ${response.status}`);
+                        throw new Error(`HTTP ${response.status}`);
                     }
-
-                } catch (error) {
-                    console.error('Regeneration failed:', error);
-
-                    // Show error notification
-                    if (docsWebSocket) {
-                        docsWebSocket.showNotification('error', 'Regeneration Failed', `Failed to start regeneration: ${error.message}`);
+                } catch (e) {
+                    if (window.docsWebSocket) {
+                        window.docsWebSocket.showNotification('error', 'Regeneration Failed', 'Failed to start regeneration');
                     }
-
-                    // Reset button
-                    regenerateAllBtn.classList.remove('processing');
-                    regenerateAllBtn.disabled = false;
-                    regenerateAllBtn.innerHTML = '<div class="spinner"></div>🔄 Regenerate All';
+                } finally {
+                    setTimeout(() => {
+                        regenerateAllBtn.classList.remove('processing');
+                        regenerateAllBtn.disabled = false;
+                        regenerateAllBtn.innerHTML = '<div class="spinner"></div>🔄 Regenerate All';
+                    }, 1200);
                 }
             });
         });
@@ -1483,27 +1517,98 @@
 
         // Filter functionality
         document.addEventListener('DOMContentLoaded', function() {
-            const filterActiveBtn = document.getElementById('filterActive');
-            const filterInactiveBtn = document.getElementById('filterInactive');
-            const clearFilterBtn = document.getElementById('clearFilter');
-
-            if (filterActiveBtn) {
-                filterActiveBtn.addEventListener('click', function() {
+            // Apply initial filter to only show configured (active) modules
                     filterApps('active');
                 });
-            }
 
-            if (filterInactiveBtn) {
-                filterInactiveBtn.addEventListener('click', function() {
-                    filterApps('inactive');
-                });
-            }
+        // Browse App Sources (modal with clickable files -> read-only viewer)
+        document.addEventListener('DOMContentLoaded', function() {
+            const browseAppsBtn = document.getElementById('browseAppsBtn');
+            if (!browseAppsBtn) return;
 
-            if (clearFilterBtn) {
-                clearFilterBtn.addEventListener('click', function() {
-                    filterApps('all');
-                });
-            }
+            window.openSourceViewer = async (module) => {
+                try {
+                    const currentTheme = document.body.getAttribute('data-theme') || 'light';
+                    const resp = await fetch(`/api/app-source/${encodeURIComponent(module)}?fmt=html&theme=${encodeURIComponent(currentTheme)}`);
+                    if (!resp.ok) throw new Error(`Server responded with ${resp.status}`);
+                    const html = await resp.text();
+
+                    // Overlay for source viewer (higher z-index to appear over browser modal)
+                    const overlay = document.createElement('div');
+                    overlay.style.position = 'fixed';
+                    overlay.style.top = '0';
+                    overlay.style.left = '0';
+                    overlay.style.right = '0';
+                    overlay.style.bottom = '0';
+                    overlay.style.background = 'rgba(0,0,0,0.55)';
+                    overlay.style.zIndex = '2100';
+
+                    const modal = document.createElement('div');
+                    modal.style.position = 'absolute';
+                    modal.style.top = '50%';
+                    modal.style.left = '50%';
+                    modal.style.transform = 'translate(-50%, -50%)';
+                    modal.style.background = 'var(--bg-secondary)';
+                    modal.style.border = '1px solid var(--border-primary)';
+                    modal.style.borderRadius = '8px';
+                    modal.style.width = '80%';
+                    modal.style.maxWidth = '1000px';
+                    modal.style.maxHeight = '80%';
+                    modal.style.overflow = 'auto';
+                    modal.style.boxShadow = '0 10px 30px rgba(0,0,0,0.3)';
+
+                    const header = document.createElement('div');
+                    header.style.display = 'flex';
+                    header.style.justifyContent = 'space-between';
+                    header.style.alignItems = 'center';
+                    header.style.padding = '12px 16px';
+                    header.style.borderBottom = '1px solid var(--border-primary)';
+                    header.id = 'source-browser-viewer-title';
+                    header.textContent = `Source: ${module}.py`;
+
+                    const closeBtn = document.createElement('button');
+                    closeBtn.textContent = '✖';
+                    closeBtn.style.background = 'none';
+                    closeBtn.style.border = 'none';
+                    closeBtn.style.cursor = 'pointer';
+                    closeBtn.setAttribute('aria-label', 'Close source viewer');
+                    closeBtn.setAttribute('title', 'Close');
+                    closeBtn.addEventListener('click', () => document.body.removeChild(overlay));
+                    header.appendChild(closeBtn);
+
+                    const codeContainer = document.createElement('div');
+                    const iframe = document.createElement('iframe');
+                    iframe.setAttribute('sandbox', 'allow-same-origin');
+                    iframe.style.width = '100%';
+                    iframe.style.height = '70vh';
+                    iframe.style.border = 'none';
+                    iframe.srcdoc = html;
+                    codeContainer.appendChild(iframe);
+
+                    modal.setAttribute('role', 'dialog');
+                    modal.setAttribute('aria-modal', 'true');
+                    modal.setAttribute('aria-labelledby', 'source-browser-viewer-title');
+                    modal.appendChild(header);
+                    modal.appendChild(codeContainer);
+                    overlay.appendChild(modal);
+                    modal.addEventListener('click', (event) => event.stopPropagation());
+                    overlay.addEventListener('click', (event) => { if (event.target === overlay) document.body.removeChild(overlay); });
+                    document.body.appendChild(overlay);
+                } catch (e) {
+                    console.error('Failed to load source:', e);
+                }
+            };
+
+            // Show overlay when HTMX loads content
+            const overlay = document.getElementById('overlay');
+            const overlayClose = document.getElementById('overlayClose');
+            if (overlayClose) overlayClose.addEventListener('click', () => { overlay.style.display = 'none'; });
+            document.body.addEventListener('htmx:afterOnLoad', (evt) => {
+                if (evt && evt.target && evt.target.id === 'overlayContent') {
+                    overlay.style.display = 'block';
+                }
+            });
+            overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.style.display = 'none'; });
         });
     </script>
 </body>

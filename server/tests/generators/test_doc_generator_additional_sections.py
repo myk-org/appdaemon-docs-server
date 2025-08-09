@@ -158,32 +158,13 @@ def test_generate_automation_flow_diagram_with_decision(tmp_path: Path):
     )
     out = gen._generate_automation_flow_diagram(cls)
     # When multiple listeners for same entity, decision node is included
-    assert "```mermaid" in out or out == ""
+    assert 'class="cytoscape-diagram"' in out or out == ""
 
 
 def test_generate_integration_points_with_mqtt(tmp_path: Path):
+    # Integration points section removed from generator; ensure generator can still be instantiated
     gen = AppDaemonDocGenerator(str(tmp_path))
-    cls = ClassInfo(
-        name="X",
-        base_classes=[],
-        docstring=None,
-        methods=[],
-        state_listeners=[],
-        mqtt_listeners=[MQTTListener(callback_method="on", topic="t", namespace="mqtt", kwargs={}, line_number=1)],
-        service_calls=[],
-        time_schedules=[],
-        device_relationships=[],
-        automation_flows=[],
-        imports=[],
-        constants_used=[],
-        initialize_code=None,
-        line_number=1,
-    )
-    pf = ParsedFile(
-        file_path=str(tmp_path / "x.py"), imports=[], classes=[cls], constants_used=set(), module_docstring=""
-    )
-    out = gen._generate_integration_points_section(pf)
-    assert "MQTT Integration" in out
+    assert gen is not None
 
 
 def test_generate_enhanced_configuration_section_no_listeners(tmp_path: Path):

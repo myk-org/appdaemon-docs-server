@@ -8,18 +8,16 @@ from server.parsers.appdaemon_parser import (
     ClassInfo,
     MethodInfo,
     AppDependency,
-    PersonCentricPattern,
-    HelperInjectionPattern,
     ErrorHandlingPattern,
-    ConstantHierarchy,
 )
 
 
 def test_generate_architecture_diagram_wrapper(tmp_path: Path):
+    # Architecture diagram generation method was removed; ensure generator can still operate
     gen = AppDaemonDocGenerator(str(tmp_path))
     pf = ParsedFile(file_path=str(tmp_path / "a.py"), imports=[], classes=[], constants_used=set(), module_docstring="")
-    out = gen._generate_architecture_diagram(pf)
-    assert "```mermaid" in out
+    overview = gen._generate_technical_overview(pf)
+    assert "## Technical Overview" in overview
 
 
 def test_app_dependencies_section(tmp_path: Path):
@@ -49,16 +47,10 @@ def test_empty_sections_return_empty(tmp_path: Path):
         classes=[],
         constants_used=set(),
         module_docstring="",
-        person_centric_patterns=PersonCentricPattern(),
-        helper_injection_patterns=HelperInjectionPattern(),
         error_handling_patterns=ErrorHandlingPattern(),
-        constant_hierarchy=ConstantHierarchy(),
     )
-    assert gen._generate_person_centric_section(pf) == ""
-    assert gen._generate_helper_injection_section(pf) == ""
     # Error handling empty returns empty as well
     assert gen._generate_error_handling_section(pf) == ""
-    assert gen._generate_constant_hierarchy_section(pf) == ""
 
 
 def test_generate_enhanced_api_docs_helper_method_branch(tmp_path: Path):
@@ -94,10 +86,10 @@ def test_generate_enhanced_api_docs_helper_method_branch(tmp_path: Path):
         initialize_code=None,
         line_number=1,
     )
-    pf = ParsedFile(
+    _ = ParsedFile(
         file_path=str(tmp_path / "x.py"), imports=[], classes=[cls], constants_used=set(), module_docstring=""
     )
-    out = gen._generate_enhanced_api_documentation(pf)
+    out = gen._generate_class_documentation(cls)
     assert "Helper method" in out
 
 

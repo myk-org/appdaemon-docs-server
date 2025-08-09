@@ -100,6 +100,12 @@ wheels = [
 ]
 
 [[package]]
+name = "code2flow"
+version = "2.5.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/3b/a5/d1a0d78f1d31d592131eed19c48839c17a842094a683242ec0d0a825830e/code2flow-2.5.1.tar.gz", hash = "sha256:ad98717920da6598dac38a1951f38b84891f4aa4bd2f36c119b0dbac729f4785", size = 313232, upload-time = "2023-01-08T22:56:44.649Z" }
+
+[[package]]
 name = "colorama"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -207,6 +213,10 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "ruff" },
 ]
+flow-extract = [
+    { name = "code2flow" },
+    { name = "pyan3" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -229,13 +239,15 @@ tests = [
 
 [package.metadata]
 requires-dist = [
+    { name = "code2flow", marker = "extra == 'flow-extract'", specifier = ">=2.5.0" },
     { name = "fastapi", specifier = ">=0.116.1" },
     { name = "fastapi-mcp", specifier = ">=0.2.0" },
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "markdown", specifier = ">=3.8.2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
+    { name = "pyan3", marker = "extra == 'flow-extract'", specifier = ">=1.2.0" },
     { name = "pygments", specifier = ">=2.19.2" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.20.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "python-multipart", specifier = ">=0.0.6" },
@@ -246,7 +258,7 @@ requires-dist = [
     { name = "watchdog", specifier = ">=4.0.0" },
     { name = "websockets", specifier = ">=12.0" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["dev", "flow-extract"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -260,7 +272,7 @@ dev = [
 tests = [
     { name = "httpx", specifier = ">=0.25.0" },
     { name = "playwright", specifier = ">=1.40.0" },
-    { name = "pytest", specifier = ">=8.4.1" },
+    { name = "pytest", specifier = ">=8.4" },
     { name = "pytest-asyncio", specifier = ">=0.23.0" },
     { name = "pytest-cov", specifier = ">=4.1.0" },
     { name = "pytest-playwright", specifier = ">=0.4.4" },
@@ -774,6 +786,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/cd/05/0a34433a064256a578f1783a10da6df098ceaa4a57bbeaa96a6c0352786b/pure_eval-0.2.3.tar.gz", hash = "sha256:5f4e983f40564c576c7c8635ae88db5956bb2229d7e9237d03b3c0b0190eaf42", size = 19752, upload-time = "2024-07-21T12:58:21.801Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8e/37/efad0257dc6e593a18957422533ff0f87ede7c9c6ea010a2177d738fb82f/pure_eval-0.2.3-py3-none-any.whl", hash = "sha256:1db8e35b67b3d218d818ae653e27f06c3aa420901fa7b081ca98cbedc874e0d0", size = 11842, upload-time = "2024-07-21T12:58:20.04Z" },
+]
+
+[[package]]
+name = "pyan3"
+version = "1.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "jinja2" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8f/8e/340533f6c084a53705527735e7db521756a10b297841671ee4042c5b281a/pyan3-1.2.0.tar.gz", hash = "sha256:36b49b678820e882de7271fb8a18789d57cd1e284f0314bdecd587f02c049a19", size = 49721, upload-time = "2021-02-11T13:22:25.838Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/34/f8/73460b7ac0650feec0601c3c24fd1ced4d986eecc447236464ae487fab10/pyan3-1.2.0-py3-none-any.whl", hash = "sha256:89b4d7b3003b794fb9b041b08da91bcbd1dde4c82ec4af039b1e6b8f418efab1", size = 50561, upload-time = "2021-02-11T13:22:23.898Z" },
 ]
 
 [[package]]

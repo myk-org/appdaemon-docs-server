@@ -8,6 +8,7 @@ It uses AST parsing to safely analyze code without executing it.
 """
 
 import ast
+import os
 import logging
 import re
 import yaml  # type: ignore[import-untyped]
@@ -227,6 +228,8 @@ class ParsedFile:
     helper_injection_patterns: HelperInjectionPattern = field(default_factory=HelperInjectionPattern)
     error_handling_patterns: ErrorHandlingPattern = field(default_factory=ErrorHandlingPattern)
     constant_hierarchy: ConstantHierarchy = field(default_factory=ConstantHierarchy)
+    # Mapping from code constant path (e.g., "Home.Kitchen.Light") to resolved value (e.g., "light.kitchen")
+    constant_value_map: dict[str, str] = field(default_factory=dict)
 
 
 class AppDaemonParser:
@@ -240,6 +243,16 @@ class AppDaemonParser:
         self.apps_yaml_path = Path(apps_yaml_path) if apps_yaml_path else None
         self.apps_config: dict[str, Any] = {}
         self._load_apps_config()
+        # Cache for imported module constant maps to avoid re-parsing
+        self._module_const_cache: dict[str, dict[str, str]] = {}
+        # APPS_DIR root (for locating const.py and other local modules)
+        try:
+            apps_dir_env = os.getenv("APPS_DIR", "")
+        except Exception:
+            apps_dir_env = ""
+        self._apps_dir: Path | None = (
+            Path(os.path.expandvars(os.path.expanduser(apps_dir_env))).resolve() if apps_dir_env else None
+        )
 
         # Enhanced parsing patterns
         self.service_patterns = {
@@ -340,6 +353,108 @@ class AppDaemonParser:
                 + len(class_info.automation_flows) * 5
             )
 
+        # Extract constant value assignments at module scope (e.g., Home.X = "domain.entity")
+        # and class-nested constants (e.g., class Home: class Kitchen: Light = "light.kitchen")
+        # Constants from this module
+        local_map = self._extract_constant_value_map(tree)
+        local_class_map = self._extract_class_constant_value_map(tree)
+        # Constants from imported project modules
+        imported_maps = self._extract_imported_constant_maps(file_path=file_path, tree=tree)
+        # Constants from APPS_DIR/const.py (global project constants)
+        const_map: dict[str, str] = {}
+        if self._apps_dir:
+            const_py = self._apps_dir / "const.py"
+            if const_py.exists():
+                try:
+                    const_map = self._extract_constant_map_from_path(const_py)
+                except Exception:
+                    const_map = {}
+        # Merge precedence: const.py -> imported -> local -> local class
+        merged_map: dict[str, str] = {}
+        merged_map.update(const_map)
+        for m in imported_maps:
+            merged_map.update(m)
+        merged_map.update(local_map)
+        merged_map.update(local_class_map)
+        # Add per-class self.<Nested>.* constants (e.g., self.State.ON -> "on")
+        self_scoped_map = self._extract_self_class_constant_value_map(tree)
+        merged_map.update(self_scoped_map)
+        constant_value_map = merged_map
+
+        # Resolve constants in listeners and service calls using the extracted map
+        for class_info in classes:
+            # Resolve state listener entity constants
+            for listener in class_info.state_listeners:
+                if isinstance(listener.entity, str) and listener.entity in constant_value_map:
+                    listener.entity = constant_value_map[listener.entity]
+
+            # Resolve service call entity_id constants
+            for svc in class_info.service_calls:
+                if isinstance(svc.entity_id, str) and svc.entity_id in constant_value_map:
+                    svc.entity_id = constant_value_map[svc.entity_id]
+
+                # Resolve service path constants (e.g., Actions.Cover.close -> cover.close_cover)
+                combined = f"{svc.service_domain}.{svc.service_name}" if svc.service_domain and svc.service_name else ""
+                if combined in constant_value_map:
+                    resolved_path = constant_value_map[combined]
+                    if isinstance(resolved_path, str):
+                        # Accept both "domain.service" and "domain/service"
+                        path = resolved_path.replace("/", ".")
+                        if "." in path:
+                            domain, service = path.split(".", 1)
+                            svc.service_domain = domain
+                            svc.service_name = service
+
+                # Resolve entity_id inside data payload
+                try:
+                    if isinstance(svc.data, dict) and "entity_id" in svc.data:
+                        ent = svc.data["entity_id"]
+                        if isinstance(ent, str) and ent in constant_value_map:
+                            svc.data["entity_id"] = constant_value_map[ent]
+                        elif isinstance(ent, list):
+                            new_list: list[str] = []
+                            for item in ent:
+                                if isinstance(item, str) and item in constant_value_map:
+                                    new_list.append(constant_value_map[item])
+                                else:
+                                    new_list.append(item)
+                            svc.data["entity_id"] = new_list
+                except Exception:
+                    pass
+
+            # Resolve device relationship entity constants
+            for rel in class_info.device_relationships:
+                if isinstance(rel.trigger_entity, str) and rel.trigger_entity in constant_value_map:
+                    rel.trigger_entity = constant_value_map[rel.trigger_entity]
+                if isinstance(rel.target_entity, str) and rel.target_entity in constant_value_map:
+                    rel.target_entity = constant_value_map[rel.target_entity]
+
+            # Resolve automation flow entities
+            for flow in class_info.automation_flows:
+                resolved: list[str] = []
+                for ent in flow.entities_involved:
+                    if isinstance(ent, str) and ent in constant_value_map:
+                        resolved.append(constant_value_map[ent])
+                    else:
+                        resolved.append(ent)
+                flow.entities_involved = resolved
+
+                # Resolve constants inside textual conditions
+                if flow.conditions:
+                    resolved_conditions: list[str] = []
+                    for cond in flow.conditions:
+                        cond_resolved = self._resolve_constants_in_text(cond, constant_value_map)
+                        cond_natural = self._naturalize_condition(cond_resolved)
+                        resolved_conditions.append(cond_natural)
+                    flow.conditions = resolved_conditions
+
+                # Resolve constants inside textual actions
+                if flow.actions:
+                    resolved_actions: list[str] = []
+                    for act in flow.actions:
+                        resolved_actions.append(self._resolve_constants_in_text(act, constant_value_map))
+                    flow.actions = resolved_actions
+
         # Enhanced analysis
         app_dependencies = self._extract_app_dependencies(file_path)
         person_centric_patterns = self._analyze_person_centric_patterns(classes, constants_used)
@@ -362,7 +477,159 @@ class AppDaemonParser:
             helper_injection_patterns=helper_injection_patterns,
             error_handling_patterns=error_handling_patterns,
             constant_hierarchy=constant_hierarchy,
+            constant_value_map=constant_value_map,
         )
+
+    def _extract_self_class_constant_value_map(self, tree: ast.Module) -> dict[str, str]:
+        """Extract nested class constants defined inside automation classes and expose them
+        under a self.* key space so expressions like self.State.ON can be resolved.
+
+        Example:
+            class MyApp:
+                class State:
+                    ON = "on"
+        -> "self.State.ON": "on"
+        """
+        mapping: dict[str, str] = {}
+
+        def walk_nested(cls: ast.ClassDef, prefix: str) -> None:
+            for item in cls.body:
+                if isinstance(item, ast.Assign):
+                    for target in item.targets:
+                        if (
+                            isinstance(target, ast.Name)
+                            and isinstance(item.value, ast.Constant)
+                            and isinstance(item.value.value, str)
+                        ):
+                            mapping[f"self.{prefix}.{target.id}"] = item.value.value
+                elif isinstance(item, ast.AnnAssign):
+                    if (
+                        isinstance(item.target, ast.Name)
+                        and isinstance(item.value, ast.Constant)
+                        and isinstance(item.value.value, str)
+                    ):
+                        mapping[f"self.{prefix}.{item.target.id}"] = item.value.value
+                elif isinstance(item, ast.ClassDef):
+                    walk_nested(item, f"{prefix}.{item.name}")
+
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef):
+                # Only nested class scopes under automation classes should be considered; start at one level down
+                for inner in node.body:
+                    if isinstance(inner, ast.ClassDef):
+                        walk_nested(inner, inner.name)
+
+        return mapping
+
+    def _resolve_constants_in_text(self, text: str, mapping: dict[str, str]) -> str:
+        """Replace occurrences of constant paths with resolved values inside a text snippet.
+
+        Uses regex word-boundary-like guards to avoid replacing inside larger identifiers.
+        """
+        try:
+            # Replace longer keys first to avoid partial overlaps
+            for key in sorted(mapping.keys(), key=len, reverse=True):
+                pattern = r"(?<![A-Za-z0-9_])" + re.escape(key) + r"(?![A-Za-z0-9_])"
+                text = re.sub(pattern, mapping[key], text)
+            return text
+        except Exception:
+            return text
+
+    def _strip_quotes(self, s: str) -> str:
+        if len(s) >= 2 and ((s[0] == s[-1] == '"') or (s[0] == s[-1] == "'")):
+            return s[1:-1]
+        return s
+
+    def _naturalize_condition(self, cond: str) -> str:
+        """Convert a resolved condition string into a simple natural sentence."""
+        try:
+            c = cond.strip()
+            # Normalize leading keyword
+            lead = ""
+            if c.startswith("if "):
+                c = c[3:]
+                lead = "when "
+            elif c.startswith("elif "):
+                c = c[5:]
+                lead = "or when "
+
+            # For-loops → friendlier phrasing
+            m = re.match(r"^for\s+(.*?)\s+in\s*(.*)$", c)
+            if m:
+                target = m.group(1).strip()
+                source = m.group(2).strip()
+                if target and source:
+                    return f"for each {target} in {source}"
+                if target and not source:
+                    return f"for each {target}"
+                if not target and source:
+                    return f"for each item in {source}"
+                return "for each item"
+            # Edge cases: 'for X in' or 'for  in Y' or just 'for X'
+            if c.startswith("for "):
+                rest = c[4:].strip()
+                if rest.endswith(" in"):
+                    rest = rest[:-3].strip()
+                    return f"for each {rest}" if rest else "for each item"
+                if rest.startswith("in "):
+                    return f"for each item in {rest[3:].strip()}"
+                return f"for each {rest}" if rest else "for each item"
+
+            # Fallback symbol replacements if any leftovers
+            fallback = {
+                "self.State.ON": "on",
+                "self.State.OFF": "off",
+                "self.Area.HOME": "home",
+                "self.Area.NOT_HOME": "not_home",
+            }
+            for k, v in fallback.items():
+                c = c.replace(k, v)
+
+            # Pattern: self.get_state(entity) == value
+            m = re.match(r"self\.get_state\((.+)\)\s*==\s*(.+)$", c)
+            if m:
+                ent = m.group(1).strip()
+                val = self._strip_quotes(m.group(2).strip())
+                return f"{lead}{ent} is {val}"
+
+            m = re.match(r"self\.get_state\((.+)\)\s*!=\s*(.+)$", c)
+            if m:
+                ent = m.group(1).strip()
+                val = self._strip_quotes(m.group(2).strip())
+                return f"{lead}{ent} is not {val}"
+
+            # hasattr(obj, 'Attr')
+            m = re.match(r"hasattr\(([^,]+),\s*'([^']+)'\)", c)
+            if m:
+                obj = m.group(1).strip()
+                attr = m.group(2).strip()
+                return f"{lead}{obj} has {attr}"
+
+            # name equality
+            m = re.match(r"(.+)\s*==\s*(.+)$", c)
+            if m:
+                left = m.group(1).strip()
+                right = self._strip_quotes(m.group(2).strip())
+                if left.endswith(".name"):
+                    subj = left[:-5]
+                    return f"{lead}{subj} is {right}"
+                return f"{lead}{left} equals {right}"
+
+            # membership
+            m = re.match(r"(.+)\s+in\s+(.+)$", c)
+            if m:
+                left = m.group(1).strip()
+                right = m.group(2).strip()
+                return f"{lead}{left} in {right}"
+
+            # negation
+            if c.startswith("not "):
+                return f"{lead}not {c[4:].strip()}"
+
+            # Default: prepend lead if any
+            return (lead + c).strip()
+        except Exception:
+            return cond
 
     def _extract_imports(self, tree: ast.AST) -> list[str]:
         """Extract import statements from the AST."""
@@ -396,6 +663,11 @@ class AppDaemonParser:
         automation_flows = []
         initialize_code = None
         constants_used = []
+
+        # Build a map of method name -> AST node to allow limited inlining of helper methods
+        self._current_class_method_nodes: dict[str, ast.FunctionDef] = {
+            n.name: n for n in class_node.body if isinstance(n, ast.FunctionDef)
+        }
 
         for node in class_node.body:
             if isinstance(node, ast.FunctionDef):
@@ -505,16 +777,19 @@ class AppDaemonParser:
     def _extract_state_listeners(self, method_node: ast.FunctionDef) -> list[StateListener]:
         """Extract listen_state calls from a method (typically initialize)."""
         listeners = []
+        alias_map = self._build_alias_map(method_node)
 
         for node in ast.walk(method_node):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "listen_state":
-                listener = self._parse_listen_state_call(node)
+                listener = self._parse_listen_state_call(node, alias_map)
                 if listener:
                     listeners.append(listener)
 
         return listeners
 
-    def _parse_listen_state_call(self, call_node: ast.Call) -> StateListener | None:
+    def _parse_listen_state_call(
+        self, call_node: ast.Call, alias_map: dict[str, str] | None = None
+    ) -> StateListener | None:
         """Parse a listen_state method call."""
         args = call_node.args
         kwargs = {kw.arg: self._get_value(kw.value) for kw in call_node.keywords}
@@ -524,6 +799,8 @@ class AppDaemonParser:
 
         callback_method = self._get_name(args[0])
         entity = self._get_value(args[1]) if len(args) > 1 else None
+        if isinstance(entity, str) and alias_map and entity in alias_map:
+            entity = alias_map[entity]
 
         return StateListener(
             callback_method=callback_method,
@@ -575,27 +852,28 @@ class AppDaemonParser:
     def _extract_service_calls(self, method_node: ast.FunctionDef) -> list[ServiceCall]:
         """Extract Home Assistant service calls from a method."""
         service_calls = []
+        alias_map = self._build_alias_map(method_node)
 
         for node in ast.walk(method_node):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                 method_name = node.func.attr
 
-                # Direct AppDaemon service methods
-                if method_name in self.service_patterns:
-                    service_call = self._parse_direct_service_call(node, method_name, method_node.name)
+                # call_service method (handle before generic direct methods)
+                if method_name == "call_service":
+                    service_call = self._parse_call_service_call(node, method_node.name, alias_map)
                     if service_call:
                         service_calls.append(service_call)
 
-                # call_service method
-                elif method_name == "call_service":
-                    service_call = self._parse_call_service_call(node, method_node.name)
+                # Direct AppDaemon service methods
+                elif method_name in self.service_patterns:
+                    service_call = self._parse_direct_service_call(node, method_name, method_node.name, alias_map)
                     if service_call:
                         service_calls.append(service_call)
 
         return service_calls
 
     def _parse_direct_service_call(
-        self, call_node: ast.Call, method_name: str, containing_method: str
+        self, call_node: ast.Call, method_name: str, containing_method: str, alias_map: dict[str, str] | None = None
     ) -> ServiceCall | None:
         """Parse direct service calls like turn_on, turn_off, etc."""
         args = call_node.args
@@ -614,14 +892,14 @@ class AppDaemonParser:
             return ServiceCall(
                 service_domain="unknown",
                 service_name=method_name,
-                entity_id=self._get_value(args[0]) if args else None,
+                entity_id=self._resolve_alias_value(self._get_value(args[0]) if args else None, alias_map),
                 data={k: v for k, v in kwargs.items() if k is not None},
                 line_number=call_node.lineno,
                 method_name=containing_method,
             )
 
         domain, service = service_mapping[method_name]
-        entity_id = self._get_value(args[0]) if args else kwargs.get("entity_id")
+        entity_id = self._resolve_alias_value(self._get_value(args[0]) if args else kwargs.get("entity_id"), alias_map)
 
         return ServiceCall(
             service_domain=domain,
@@ -632,7 +910,9 @@ class AppDaemonParser:
             method_name=containing_method,
         )
 
-    def _parse_call_service_call(self, call_node: ast.Call, containing_method: str) -> ServiceCall | None:
+    def _parse_call_service_call(
+        self, call_node: ast.Call, containing_method: str, alias_map: dict[str, str] | None = None
+    ) -> ServiceCall | None:
         """Parse call_service method calls."""
         args = call_node.args
         kwargs = {kw.arg: self._get_value(kw.value) for kw in call_node.keywords}
@@ -649,7 +929,7 @@ class AppDaemonParser:
         return ServiceCall(
             service_domain=domain,
             service_name=service,
-            entity_id=kwargs.get("entity_id"),
+            entity_id=self._resolve_alias_value(kwargs.get("entity_id"), alias_map),
             data={k: v for k, v in kwargs.items() if k is not None},
             line_number=call_node.lineno,
             method_name=containing_method,
@@ -778,7 +1058,7 @@ class AppDaemonParser:
         # Extract condition
         condition_text = self._extract_condition_text(if_node.test)
         if condition_text:
-            conditions.append(condition_text)
+            conditions.append(f"if {condition_text}")
 
         # Extract actions from if body
         for stmt in if_node.body:
@@ -786,6 +1066,24 @@ class AppDaemonParser:
                 action = self._extract_action_text(stmt.value)
                 if action:
                     actions.append(action)
+
+        # Handle elif/else blocks
+        for stmt in if_node.orelse:
+            if isinstance(stmt, ast.If):
+                elif_text = self._extract_condition_text(stmt.test)
+                if elif_text:
+                    conditions.append(f"elif {elif_text}")
+                for sub in stmt.body:
+                    if isinstance(sub, ast.Expr) and isinstance(sub.value, ast.Call):
+                        action = self._extract_action_text(sub.value)
+                        if action:
+                            actions.append(action)
+            else:
+                # Else branch may contain direct calls; collect them as actions
+                if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+                    action = self._extract_action_text(stmt.value)
+                    if action:
+                        actions.append(action)
 
         # Extract entities from conditions and actions
         entities_involved = self._extract_entities_from_flow(if_node)
@@ -811,8 +1109,8 @@ class AppDaemonParser:
         if isinstance(loop_node, ast.For):
             flow_type = "sequence"
             # Extract iteration target
-            target = self._get_name(loop_node.target)
-            iter_source = self._get_name(loop_node.iter)
+            target = self._extract_condition_text(loop_node.target)
+            iter_source = self._extract_condition_text(loop_node.iter)
             conditions.append(f"for {target} in {iter_source}")
         else:
             flow_type = "loop"
@@ -896,6 +1194,22 @@ class AppDaemonParser:
             if isinstance(call_node.func, ast.Attribute):
                 method_name = call_node.func.attr
 
+                # Inline simple helper method calls inside callbacks to capture downstream actions
+                # e.g., update_sensors() -> _send_request() -> call_service(...)
+                try:
+                    if (
+                        isinstance(call_node.func.value, ast.Name)
+                        and call_node.func.value.id == "self"
+                        and method_name.startswith("_")
+                        and hasattr(self, "_current_class_method_nodes")
+                        and method_name in self._current_class_method_nodes
+                    ):
+                        callee = self._current_class_method_nodes[method_name]
+                        for sub in callee.body:
+                            self._analyze_statement_for_actions(sub, actions)
+                except Exception:
+                    pass
+
                 # Detect different types of actions
                 if "notify" in method_name.lower() or "send_notify" in method_name.lower():
                     actions.append(
@@ -962,26 +1276,122 @@ class AppDaemonParser:
         return list(set(entities))
 
     def _extract_condition_text(self, test_node: ast.AST) -> str:
-        """Extract readable text from condition node."""
-        if isinstance(test_node, ast.Compare):
-            left = self._get_name(test_node.left)
-            ops = [type(op).__name__ for op in test_node.ops]
-            comparators = [self._get_name(comp) for comp in test_node.comparators]
-            return f"{left} {' '.join(ops)} {' '.join(comparators)}"
-        elif isinstance(test_node, ast.BoolOp):
-            op = type(test_node.op).__name__.lower()
-            values = [self._extract_condition_text(val) for val in test_node.values]
-            return f" {op} ".join(values)
-        else:
-            return self._get_name(test_node)
+        """Extract readable text from a condition (if/while test) node."""
+        return self._expr_to_text(test_node)
 
     def _extract_action_text(self, call_node: ast.Call) -> str:
         """Extract readable text from action call."""
-        if isinstance(call_node.func, ast.Attribute):
-            method = call_node.func.attr
-            args = [self._get_name(arg) for arg in call_node.args]
-            return f"{method}({', '.join(args)})"
-        return self._get_name(call_node.func)
+        func_text = self._expr_to_text(call_node.func)
+        args_text = ", ".join(self._expr_to_text(arg) for arg in call_node.args)
+        return f"{func_text}({args_text})"
+
+    # --- Expression pretty-printer helpers ---
+    def _expr_to_text(self, node: ast.AST) -> str:
+        """Convert an AST expression into a concise, human-readable string."""
+        try:
+            if isinstance(node, ast.Constant):
+                return repr(node.value)
+            if isinstance(node, ast.Name):
+                return node.id
+            if isinstance(node, ast.Attribute):
+                return f"{self._expr_to_text(node.value)}.{node.attr}"
+            if isinstance(node, ast.Subscript):
+                base = self._expr_to_text(node.value)
+                sl = getattr(node, "slice", None)
+                sl_text = self._expr_to_text(sl) if sl is not None else ""
+                return f"{base}[{sl_text}]"
+            # ast.Index was removed in Python 3.9, handled by ast.Subscript directly now
+            if isinstance(node, ast.Slice):
+                lower = self._expr_to_text(node.lower) if node.lower else ""
+                upper = self._expr_to_text(node.upper) if node.upper else ""
+                step = self._expr_to_text(node.step) if node.step else ""
+                core = f"{lower}:{upper}"
+                return f"{core}:{step}" if step else core
+            if isinstance(node, ast.Call):
+                func = self._expr_to_text(node.func)
+                args = ", ".join(self._expr_to_text(a) for a in node.args)
+                return f"{func}({args})"
+            if isinstance(node, ast.UnaryOp):
+                op = self._unary_op_to_text(node.op)
+                return f"{op}{self._expr_to_text(node.operand)}"
+            if isinstance(node, ast.BinOp):
+                left = self._expr_to_text(node.left)
+                op = self._bin_op_to_text(node.op)
+                right = self._expr_to_text(node.right)
+                return f"({left} {op} {right})"
+            if isinstance(node, ast.BoolOp):
+                bool_op_text = self._bool_op_to_text(node.op)
+                return f" {bool_op_text} ".join(self._expr_to_text(v) for v in node.values)
+            if isinstance(node, ast.Compare):
+                left = self._expr_to_text(node.left)
+                cmp_parts: list[str] = []
+                for cmp_op, comp in zip(node.ops, node.comparators):
+                    cmp_parts.append(f"{self._cmp_op_to_text(cmp_op)} {self._expr_to_text(comp)}")
+                return f"{left} {' '.join(cmp_parts)}"
+            if isinstance(node, ast.JoinedStr):  # f-string
+                fparts: list[str] = []
+                for v in node.values:
+                    if isinstance(v, ast.Constant) and isinstance(v.value, str):
+                        fparts.append(v.value)
+                    elif isinstance(v, ast.FormattedValue):
+                        fparts.append("{" + self._expr_to_text(v.value) + "}")
+                return "f'" + "".join(fparts) + "'"
+            return self._get_name(node)
+        except Exception:
+            return self._get_name(node)
+
+    def _bool_op_to_text(self, op: ast.boolop) -> str:
+        return "and" if isinstance(op, ast.And) else ("or" if isinstance(op, ast.Or) else type(op).__name__.lower())
+
+    def _unary_op_to_text(self, op: ast.unaryop) -> str:
+        if isinstance(op, ast.Not):
+            return "not "
+        if isinstance(op, ast.USub):
+            return "-"
+        if isinstance(op, ast.UAdd):
+            return "+"
+        if isinstance(op, ast.Invert):
+            return "~"
+        return type(op).__name__
+
+    def _bin_op_to_text(self, op: ast.operator) -> str:
+        mapping = {
+            ast.Add: "+",
+            ast.Sub: "-",
+            ast.Mult: "*",
+            ast.MatMult: "@",
+            ast.Div: "/",
+            ast.Mod: "%",
+            ast.Pow: "**",
+            ast.FloorDiv: "//",
+            ast.BitOr: "|",
+            ast.BitAnd: "&",
+            ast.BitXor: "^",
+            ast.LShift: "<<",
+            ast.RShift: ">>",
+        }
+        for k, v in mapping.items():
+            if isinstance(op, k):
+                return v
+        return type(op).__name__
+
+    def _cmp_op_to_text(self, op: ast.cmpop) -> str:
+        mapping = {
+            ast.Eq: "==",
+            ast.NotEq: "!=",
+            ast.Lt: "<",
+            ast.LtE: "<=",
+            ast.Gt: ">",
+            ast.GtE: ">=",
+            ast.Is: "is",
+            ast.IsNot: "is not",
+            ast.In: "in",
+            ast.NotIn: "not in",
+        }
+        for k, v in mapping.items():
+            if isinstance(op, k):
+                return v
+        return type(op).__name__
 
     def _extract_entities_from_flow(self, node: ast.AST) -> list[str]:
         """Extract entity references from flow logic."""
@@ -1013,6 +1423,225 @@ class AppDaemonParser:
 
         return None
 
+    def _extract_constant_value_map(self, tree: ast.AST) -> dict[str, str]:
+        """Extract assignments of the form Namespace.Sub.property = "value" into a map.
+
+        This allows resolving code constants like Home.Kitchen.Light to actual entity ids
+        such as light.kitchen, when defined in the same module.
+        """
+        mapping: dict[str, str] = {}
+
+        def full_attr(n: ast.AST) -> str:
+            if isinstance(n, ast.Name):
+                return n.id
+            if isinstance(n, ast.Attribute):
+                return f"{full_attr(n.value)}.{n.attr}"
+            return ""
+
+        def eval_str(node: ast.AST) -> str | None:
+            # Try to statically evaluate a string-like value
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                return node.value
+            if isinstance(node, ast.JoinedStr):
+                parts: list[str] = []
+                for v in node.values:
+                    if isinstance(v, ast.Constant) and isinstance(v.value, str):
+                        parts.append(v.value)
+                    elif isinstance(v, ast.FormattedValue):
+                        # Best-effort: ignore formatted part (keeps static content)
+                        inner = eval_str(v.value)
+                        if inner is not None:
+                            parts.append(inner)
+                return "".join(parts)
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+                left = eval_str(node.left)
+                right = eval_str(node.right)
+                if left is not None and right is not None:
+                    return left + right
+            return None
+
+        for node in ast.walk(tree):
+            # Simple assignments like Home.Kitchen.Light = "light.kitchen"
+            if isinstance(node, ast.Assign):
+                if len(node.targets) == 1 and isinstance(node.targets[0], ast.Attribute):
+                    key = full_attr(node.targets[0])
+                    sval = eval_str(node.value)
+                    if isinstance(sval, str):
+                        mapping[key] = sval
+            # Annotated assignment: Home.Alarm: str = "alarm_control_panel.home"
+            elif isinstance(node, ast.AnnAssign):
+                if isinstance(node.target, ast.Attribute):
+                    sval = eval_str(node.value) if node.value is not None else None
+                    if isinstance(sval, str):
+                        key = full_attr(node.target)
+                        mapping[key] = sval
+            # Calls like setattr(Home.Kitchen, "Light", "light.kitchen")
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "setattr":
+                try:
+                    obj, attr_name, value = node.args[0], node.args[1], node.args[2]
+                    base = full_attr(obj)
+                    aname = eval_str(attr_name)
+                    sval = eval_str(value)
+                    if base and isinstance(aname, str) and isinstance(sval, str):
+                        mapping[f"{base}.{aname}"] = sval
+                except Exception:
+                    pass
+
+        return mapping
+
+    def _extract_class_constant_value_map(self, tree: ast.Module) -> dict[str, str]:
+        """Extract class-nested constants for patterns like:
+        class Home:
+            class Kitchen:
+                Light = "light.kitchen"
+        -> "Home.Kitchen.Light": "light.kitchen"
+        """
+        mapping: dict[str, str] = {}
+
+        def walk_class(cls: ast.ClassDef, prefix: str) -> None:
+            current_prefix = f"{prefix}.{cls.name}" if prefix else cls.name
+            for item in cls.body:
+                if isinstance(item, ast.Assign):
+                    for target in item.targets:
+                        if (
+                            isinstance(target, ast.Name)
+                            and isinstance(item.value, ast.Constant)
+                            and isinstance(item.value.value, str)
+                        ):
+                            mapping[f"{current_prefix}.{target.id}"] = item.value.value
+                elif isinstance(item, ast.AnnAssign):
+                    if (
+                        isinstance(item.target, ast.Name)
+                        and isinstance(item.value, ast.Constant)
+                        and isinstance(item.value.value, str)
+                    ):
+                        mapping[f"{current_prefix}.{item.target.id}"] = item.value.value
+                elif isinstance(item, ast.ClassDef):
+                    walk_class(item, current_prefix)
+
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef):
+                walk_class(node, prefix="")
+
+        return mapping
+
+    def _extract_imported_constant_maps(
+        self, file_path: Path, tree: ast.AST, depth: int = 0, visited: set[str] | None = None
+    ) -> list[dict[str, str]]:
+        """Extract constant maps from imported modules by statically resolving module files.
+
+        Attempts to resolve only local project files relative to the current module directory.
+        Limits recursion depth to avoid excessive traversal.
+        """
+        if visited is None:
+            visited = set()
+
+        if depth > 2:
+            return []
+
+        current_dir = Path(file_path).parent
+        modules: list[str] = []
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name:
+                        modules.append(alias.name)
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    modules.append(node.module)
+
+        collected: list[dict[str, str]] = []
+
+        for mod in modules:
+            if mod in visited:
+                continue
+            visited.add(mod)
+
+            candidate = self._find_module_file(mod, current_dir)
+            if not candidate or not candidate.exists():
+                # Heuristic: look for sibling const.py/constants.py
+                if any(tok in mod.lower() for tok in ("const", "constants")):
+                    for name in ("const.py", "constants.py"):
+                        alt = current_dir / name
+                        if alt.exists():
+                            candidate = alt
+                            break
+            # Try APPS_DIR/const.py for modules named 'const' when not found
+            if (not candidate or not candidate.exists()) and self._apps_dir:
+                if mod.split(".")[-1].lower() in ("const", "constants"):
+                    alt = self._apps_dir / "const.py"
+                    if alt.exists():
+                        candidate = alt
+            if not candidate or not candidate.exists():
+                continue
+
+            key = str(candidate.resolve())
+            if key in self._module_const_cache:
+                collected.append(self._module_const_cache[key])
+                continue
+
+            try:
+                cmap = self._extract_constant_map_from_path(candidate)
+                # Recurse into that module's imports (bounded)
+                other_source = candidate.read_text(encoding="utf-8")
+                other_tree = ast.parse(other_source)
+                submaps = self._extract_imported_constant_maps(candidate, other_tree, depth + 1, visited)
+                merged: dict[str, str] = {}
+                for sm in submaps:
+                    merged.update(sm)
+                merged.update(cmap)
+                self._module_const_cache[key] = merged
+                collected.append(merged)
+            except Exception:
+                # Ignore any issues with imported modules; best-effort resolution
+                continue
+
+        return collected
+
+    def _find_module_file(self, module_name: str, base_dir: Path) -> Path | None:
+        """Resolve a python module name to a file path within the project tree.
+
+        Tries relative to current file directory.
+        """
+        rel = Path(*module_name.split("."))
+        # Try module.py
+        cand = base_dir / (str(rel) + ".py")
+        if cand.exists():
+            return cand
+        # Try package/__init__.py
+        cand = base_dir / rel / "__init__.py"
+        if cand.exists():
+            return cand
+        # Try project root heuristic
+        try:
+            project_root = Path(__file__).resolve().parents[2]
+            alt = project_root / (str(rel) + ".py")
+            if alt.exists():
+                return alt
+        except Exception:
+            pass
+        # Try APPS_DIR
+        if self._apps_dir:
+            alt = self._apps_dir / (str(rel) + ".py")
+            if alt.exists():
+                return alt
+            pkg = self._apps_dir / rel / "__init__.py"
+            if pkg.exists():
+                return pkg
+        return None
+
+    def _extract_constant_map_from_path(self, path: Path) -> dict[str, str]:
+        """Parse a module file and extract constant map using the same AST logic."""
+        source = path.read_text(encoding="utf-8")
+        other_tree = ast.parse(source)
+        mapping = self._extract_constant_value_map(other_tree)
+        class_mapping = self._extract_class_constant_value_map(other_tree)
+        merged: dict[str, str] = {}
+        merged.update(mapping)
+        merged.update(class_mapping)
+        return merged
+
     def _get_name(self, node: ast.AST) -> str:
         """Get the name from various AST node types."""
         if isinstance(node, ast.Name):
@@ -1040,12 +1669,50 @@ class AppDaemonParser:
             }
         return None
 
+    def _build_alias_map(self, method_node: ast.FunctionDef) -> dict[str, str]:
+        """Build a simple alias map inside a method for patterns like:
+        entity = Home.Kitchen.Light
+        self.turn_on(entity)
+        """
+        alias_map: dict[str, str] = {}
+        try:
+            for stmt in method_node.body:
+                if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+                    target = stmt.targets[0]
+                    value = stmt.value
+                    if isinstance(target, ast.Name):
+                        key = target.id
+                        resolved_value = self._get_value(value)
+                        if isinstance(resolved_value, str):
+                            alias_map[key] = resolved_value
+        except Exception:
+            pass
+        return alias_map
+
+    def _resolve_alias_value(self, value: Any, alias_map: dict[str, str] | None) -> Any:
+        if isinstance(value, str) and alias_map and value in alias_map:
+            return alias_map[value]
+        return value
+
     def _load_apps_config(self) -> None:
         """Load apps.yaml configuration if available."""
         if self.apps_yaml_path and self.apps_yaml_path.exists():
             try:
                 with open(self.apps_yaml_path, "r", encoding="utf-8") as f:
-                    self.apps_config = yaml.safe_load(f) or {}
+                    loaded = yaml.safe_load(f)
+                    if isinstance(loaded, dict):
+                        self.apps_config = loaded
+                    elif loaded is None:
+                        self.logger.warning(
+                            "apps.yaml at %s is empty; expected a mapping (dict). Ignoring.",
+                            self.apps_yaml_path,
+                        )
+                    else:
+                        self.logger.warning(
+                            "apps.yaml at %s contains a %s; expected a mapping (dict). Ignoring.",
+                            self.apps_yaml_path,
+                            type(loaded).__name__,
+                        )
             except Exception as e:
                 self.logger.error(
                     "Failed to load apps.yaml configuration from %s: %s", self.apps_yaml_path, str(e), exc_info=True
@@ -1054,13 +1721,22 @@ class AppDaemonParser:
 
     def _extract_app_dependencies(self, file_path: Path) -> list[AppDependency]:
         """Extract app dependencies from apps.yaml configuration."""
-        dependencies = []
+        dependencies: list[AppDependency] = []
 
         # Get module name from file path
         module_name = file_path.stem
 
         # Find all apps that use this module
-        for app_name, app_config in self.apps_config.items():
+        # Guard: apps_config must expose .items() to iterate key/value pairs
+        items_method = getattr(self.apps_config, "items", None)
+        if not callable(items_method):
+            self.logger.warning(
+                "apps.yaml root is %s; expected a mapping (dict). Skipping dependency extraction.",
+                type(self.apps_config).__name__,
+            )
+            return dependencies
+
+        for app_name, app_config in items_method():
             if isinstance(app_config, dict) and app_config.get("module") == module_name:
                 # Ensure dependencies is always a list of strings
                 deps_value = app_config.get("dependencies", [])

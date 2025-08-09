@@ -12,6 +12,7 @@ import logging
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
+import time
 
 from fastapi import WebSocket, WebSocketDisconnect
 import asyncio
@@ -56,8 +57,6 @@ class WebSocketEvent:
     def __post_init__(self) -> None:
         """Set timestamp if not provided."""
         if self.timestamp is None:
-            import time
-
             self.timestamp = time.time()
 
     def to_dict(self) -> dict[str, Any]:
@@ -222,9 +221,6 @@ class WebSocketManager:
         Returns:
             Number of clients that received the event
         """
-        if not self._connections:
-            return 0
-
         successful_sends = 0
         failed_connections = set()
 

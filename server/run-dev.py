@@ -126,7 +126,19 @@ def run_local_python() -> None:
 
     print(f"📂 Apps directory: {apps_path}")
     host = os.environ["HOST"]
-    port = int(os.environ["PORT"])
+    # Validate PORT is an integer and within valid range
+    raw_port = os.environ["PORT"]
+    try:
+        port = int(raw_port)
+    except ValueError:
+        print(f"❌ Error: Invalid PORT value '{raw_port}'. PORT must be an integer between 1 and 65535.")
+        print("💡 Update the PORT value in your .dev_env file and try again.")
+        sys.exit(1)
+
+    if not (0 < port < 65536):
+        print(f"❌ Error: PORT {port} is out of range. PORT must be between 1 and 65535.")
+        print("💡 Update the PORT value in your .dev_env file and try again.")
+        sys.exit(1)
     print(f"🌐 Server will be available at: http://{host}:{port}")
     print()
 
@@ -159,8 +171,19 @@ def run_local_python() -> None:
     for d in reload_dirs:
         cmd.extend(["--reload-dir", d])
 
+    # Exclude tests from triggering reloads during development
+    cmd.extend([
+        "--reload-exclude",
+        str(project_root / "server" / "tests"),
+    ])
+
     try:
         subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        print("❌ Failed to start dev server (uvicorn).")
+        print(f"   Exit code: {e.returncode}")
+        print("💡 Check your .dev_env settings, port availability, and app imports.")
+        sys.exit(1)
     except KeyboardInterrupt:
         print("\n🛑 Stopping dev server...")
 

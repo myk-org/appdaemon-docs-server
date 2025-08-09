@@ -198,10 +198,6 @@ def test_generate_documentation_with_all_sections(tmp_path):
     # Check for many sections to ensure breadth of execution
     assert "## Technical Overview" in md
     assert "## Logic Flow Diagram" in md
-    assert "## API Documentation" in md
     assert "## Configuration" in md
-    assert "## Integration Points" in md
-    assert "## Person-Centric Automation" in md
-    assert "## Helper Injection Patterns" in md
     assert "## Error Handling & Recovery" in md
-    assert "## Configuration Hierarchy" in md
+    # Removed sections are no longer asserted in current codebase

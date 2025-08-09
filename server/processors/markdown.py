@@ -2,6 +2,7 @@
 
 import logging
 import threading
+from collections import OrderedDict
 
 import markdown
 
@@ -40,10 +41,9 @@ class MarkdownProcessor:
             extensions=MARKDOWN_EXTENSIONS,
             extension_configs=MARKDOWN_EXTENSION_CONFIGS,
         )
-        self._cache: dict[tuple[str, int], str] = {}
+        # LRU cache implemented with OrderedDict for O(1) updates and eviction
+        self._cache: OrderedDict[tuple[str, int], str] = OrderedDict()
         self._max_cache_size = 128
-        # Track access order for true LRU eviction
-        self._access_order: list[tuple[str, int]] = []
         # Synchronization for thread-safe processing and cache access
         self._lock = threading.Lock()
 
@@ -65,9 +65,7 @@ class MarkdownProcessor:
                 # Check cache first
                 if cache_key in self._cache:
                     # Update access order for LRU
-                    if cache_key in self._access_order:
-                        self._access_order.remove(cache_key)
-                    self._access_order.append(cache_key)
+                    self._cache.move_to_end(cache_key)
                     return self._cache[cache_key]
 
             # Read and render outside of lock for I/O, but protect the shared Markdown instance
@@ -75,18 +73,22 @@ class MarkdownProcessor:
                 content = f.read()
 
             with self._lock:
+                # Second cache check under lock to avoid duplicate work if another
+                # thread cached the result after we released the lock for I/O
+                if cache_key in self._cache:
+                    self._cache.move_to_end(cache_key)
+                    return self._cache[cache_key]
+
                 # Reset markdown instance for clean processing
                 self.md.reset()
                 html_content = str(self.md.convert(content))
 
                 # Cache the result with true LRU eviction
-                if len(self._cache) >= self._max_cache_size and self._access_order:
+                if len(self._cache) >= self._max_cache_size:
                     # Remove least recently used entry (true LRU)
-                    lru_key = self._access_order.pop(0)
-                    self._cache.pop(lru_key, None)
+                    self._cache.popitem(last=False)
 
                 self._cache[cache_key] = html_content
-                self._access_order.append(cache_key)
                 return html_content
 
         except Exception as e:
@@ -97,4 +99,3 @@ class MarkdownProcessor:
         """Clear the internal render cache safely."""
         with self._lock:
             self._cache.clear()
-            self._access_order.clear()

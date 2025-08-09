@@ -34,7 +34,7 @@ class TestMarkdownProcessor:
         assert processor.md is not None
         assert processor._cache == {}
         assert processor._max_cache_size == 128
-        assert processor._access_order == []
+        # Access order list removed; LRU is handled by OrderedDict move_to_end
 
     def test_process_file_happy_path(self, processor, temp_markdown_file):
         """Test basic markdown file processing."""
@@ -51,13 +51,13 @@ class TestMarkdownProcessor:
         # First call
         result1 = processor.process_file(temp_markdown_file, 123)
         assert len(processor._cache) == 1
-        assert len(processor._access_order) == 1
+        # Internal access order list removed in implementation
 
         # Second call with same hash should use cache
         result2 = processor.process_file(temp_markdown_file, 123)
         assert result1 == result2
         assert len(processor._cache) == 1
-        assert len(processor._access_order) == 1
+        # Internal access order list removed in implementation
 
     def test_process_file_cache_invalidation(self, processor, temp_markdown_file):
         """Test that different content hashes invalidate cache."""
