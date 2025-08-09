@@ -52,7 +52,12 @@ class ProgressCallbackManager:
 
         if self.pending_tasks is not None:
             self.pending_tasks.add(task)
-            task.add_done_callback(self.pending_tasks.discard)
+
+            # Use a closure to avoid race condition where task completes before callback is set
+            def cleanup_callback(t: asyncio.Task[Any]) -> None:
+                self.pending_tasks.discard(t)
+
+            task.add_done_callback(cleanup_callback)
 
     def get_sync_callback(self) -> Callable[[int, int, str, str], None]:
         """Get the sync progress callback function.

@@ -160,6 +160,30 @@ class WebSocketManager:
         except Exception as e:
             self.logger.error(f"Error handling WebSocket disconnection: {e}")
 
+    async def cleanup_stale_connections(self) -> None:
+        """
+        Remove stale WebSocket connections that are no longer responsive.
+
+        This prevents memory leaks from connections that closed without
+        proper disconnect notification.
+        """
+        if not self._connections:
+            return
+
+        stale_connections = set()
+        for websocket in self._connections.copy():
+            try:
+                # Try to ping the connection to check if it's alive (with timeout)
+                await asyncio.wait_for(websocket.ping(), timeout=5.0)
+            except Exception:
+                # Connection is stale, mark for removal
+                stale_connections.add(websocket)
+
+        if stale_connections:
+            self.logger.info(f"Removing {len(stale_connections)} stale WebSocket connections")
+            self._connections -= stale_connections
+            self.stats["current_connections"] = len(self._connections)
+
     async def handle_client_message(self, websocket: WebSocket, message: str) -> None:
         """
         Handle incoming message from WebSocket client.
@@ -360,6 +384,34 @@ class WebSocketManager:
         """Get comprehensive statistics."""
         self.stats["current_connections"] = len(self._connections)
         return self.stats.copy()
+
+    async def periodic_cleanup(self) -> None:
+        """
+        Run periodic maintenance tasks to prevent memory leaks.
+
+        This should be called periodically (e.g., every 5-10 minutes)
+        to clean up stale connections and reset counters.
+        """
+        await self.cleanup_stale_connections()
+
+        # Reset event counter if it gets too large to prevent overflow
+        if self._event_count > 1000000:
+            self._event_count = 0
+            self.logger.info("Reset event counter to prevent overflow")
+
+    async def periodic_cleanup_loop(self) -> None:
+        """
+        Background task that runs periodic cleanup every 5 minutes.
+
+        This should be started as a background task during application startup.
+        """
+        while True:
+            try:
+                await asyncio.sleep(300)  # 5 minutes
+                await self.periodic_cleanup()
+            except Exception as e:
+                self.logger.error(f"Error during periodic cleanup: {e}")
+                # Continue the loop even if cleanup fails
 
     # SSE integration API for external modules
     def get_sse_broker(self) -> "SSEBroker":

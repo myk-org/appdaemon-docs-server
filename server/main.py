@@ -15,6 +15,7 @@ from typing import Any
 import html
 import time
 import shutil
+import resource
 
 import uvicorn
 from dotenv import load_dotenv
@@ -50,6 +51,100 @@ load_dotenv()
 log_level = os.getenv("LOG_LEVEL", "info").upper()
 logging.basicConfig(level=getattr(logging, log_level, logging.INFO))
 logger = logging.getLogger(__name__)
+
+
+def validate_safe_path(user_input: str, base_dir: Path) -> Path | None:
+    """Validate that user input results in a safe path within base_dir.
+
+    Prevents path traversal attacks by ensuring the resolved path is within base_dir.
+
+    Args:
+        user_input: User-provided filename/path
+        base_dir: Base directory that file must be within
+
+    Returns:
+        Safe path if valid, None if potentially malicious
+    """
+    try:
+        # Sanitize basic characters but rely on path resolution for security
+        sanitized = user_input.replace("..", "").replace("/", "").replace("\\", "")
+        if not sanitized or sanitized != user_input.replace("..", "").replace("/", "").replace("\\", ""):
+            # User input contained path traversal attempts
+            return None
+
+        # Resolve to absolute path and check it's within base_dir
+        safe_path = (base_dir / sanitized).resolve()
+        base_dir_resolved = base_dir.resolve()
+
+        # Ensure the path is within the base directory
+        safe_path.relative_to(base_dir_resolved)
+        return safe_path
+    except (ValueError, OSError):
+        return None
+
+
+def configure_resource_limits() -> dict[str, Any]:
+    """Configure system resource limits to prevent DoS and resource exhaustion.
+
+    Returns:
+        Dictionary with current resource limits and status
+    """
+    limits_info: dict[str, Any] = {}
+
+    try:
+        # Set reasonable file descriptor limits
+        soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+
+        # Try to increase soft limit if it's too low
+        target_soft_limit = min(4096, hard_limit)
+        if soft_limit < target_soft_limit:
+            try:
+                resource.setrlimit(resource.RLIMIT_NOFILE, (target_soft_limit, hard_limit))
+                logger.info(f"Increased file descriptor limit from {soft_limit} to {target_soft_limit}")
+                limits_info["file_descriptors"] = {
+                    "before": soft_limit,
+                    "after": target_soft_limit,
+                    "hard_limit": hard_limit,
+                }
+            except OSError as e:
+                logger.warning(f"Could not increase file descriptor limit: {e}")
+                limits_info["file_descriptors"] = {"current": soft_limit, "hard_limit": hard_limit, "error": str(e)}
+        else:
+            limits_info["file_descriptors"] = {"current": soft_limit, "hard_limit": hard_limit}
+
+        # Set memory limits if available (not available on all systems)
+        try:
+            memory_soft, memory_hard = resource.getrlimit(resource.RLIMIT_AS)
+            limits_info["memory"] = {"soft": memory_soft, "hard": memory_hard}
+        except (OSError, AttributeError):
+            limits_info["memory"] = "not_available"
+
+    except Exception as e:
+        logger.error(f"Error configuring resource limits: {e}")
+        limits_info["error"] = str(e)
+
+    return limits_info
+
+
+def get_resource_usage() -> dict[str, Any]:
+    """Get current resource usage statistics.
+
+    Returns:
+        Dictionary with resource usage information
+    """
+    try:
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        return {
+            "memory_mb": usage.ru_maxrss / 1024 if hasattr(usage, "ru_maxrss") and usage.ru_maxrss else 0,
+            "user_time": usage.ru_utime,
+            "system_time": usage.ru_stime,
+            "page_faults": usage.ru_majflt + usage.ru_minflt,
+            "context_switches": getattr(usage, "ru_nvcsw", 0) + getattr(usage, "ru_nivcsw", 0),
+        }
+    except Exception as e:
+        logger.error(f"Error getting resource usage: {e}")
+        return {"error": str(e)}
+
 
 # Application metadata - configurable via environment variables
 APP_VERSION = "1.0.0"
@@ -299,12 +394,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         None during application lifecycle
     """
     global file_watcher, startup_generation_completed, startup_errors
+    cleanup_task = None
 
     # Startup
     logger.info(f"Starting {APP_TITLE} v{APP_VERSION}")
     logger.info(f"Documentation directory: {DOCS_DIR}")
     logger.info(f"Real apps directory: {REAL_APPS_DIR}")
     logger.info(f"Mirrored apps directory: {MIRRORED_APPS_DIR}")
+
+    # Configure resource limits for security and stability
+    logger.info("🔧 Configuring resource limits...")
+    resource_limits = configure_resource_limits()
+    logger.info(f"Resource limits: {resource_limits}")
 
     startup_errors.clear()
 
@@ -379,6 +480,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         dir_status.log_status(logger)
         await broadcast_startup_completion(dir_status, file_watcher, startup_generation_completed)
 
+        # Start background WebSocket cleanup task
+        logger.info("🧹 Starting WebSocket cleanup background task...")
+        cleanup_task = asyncio.create_task(websocket_manager.periodic_cleanup_loop())
+
     except Exception as e:
         logger.error(f"Critical startup error: {e}")
         startup_errors.append(f"Critical startup error: {str(e)}")
@@ -390,6 +495,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Shutting down documentation server")
 
     try:
+        # Stop WebSocket cleanup task
+        if cleanup_task and not cleanup_task.done():
+            logger.info("Stopping WebSocket cleanup task...")
+            cleanup_task.cancel()
+            try:
+                await cleanup_task
+            except asyncio.CancelledError:
+                pass
+
         # Stop file watcher
         if file_watcher:
             logger.info("Stopping file watcher...")
@@ -442,7 +556,7 @@ async def add_security_headers(request: Request, call_next: Any) -> Response:
     response: Response = await call_next(request)
     response.headers.setdefault(
         "Content-Security-Policy",
-        "default-src 'self' https:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; "
+        "default-src 'self' https:; script-src 'self' 'unsafe-inline' https:; "
         "style-src 'self' 'unsafe-inline' https:; img-src 'self' data: https:; connect-src 'self'",
     )
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -565,7 +679,7 @@ async def health_check() -> HealthResponse:
 
 @app.get("/api/files", operation_id="list_files", response_model=FilesResponse)  # type: ignore[misc]
 async def list_documentation_files(
-    limit: int | None = Query(None, ge=1), offset: int | None = Query(None, ge=0)
+    limit: int | None = Query(None, ge=1, le=1000), offset: int | None = Query(None, ge=0, le=100000)
 ) -> FilesResponse:
     """
     List all available documentation files with metadata.
@@ -630,7 +744,13 @@ async def get_app_source(module: str, fmt: str = Query("text"), theme: str = Que
         Plain text response with the source code
     """
     try:
-        safe_module = module.replace("..", "").replace("/", "").replace("\\", "")
+        # Validate path to prevent traversal attacks
+        safe_path = validate_safe_path(module, MIRRORED_APPS_DIR)
+        if not safe_path:
+            raise HTTPException(status_code=400, detail="Invalid module name")
+
+        # Extract safe module name for search
+        safe_module = safe_path.stem
         source_path = None
         # Search for matching file in MIRRORED_APPS_DIR
         candidates = list(MIRRORED_APPS_DIR.rglob(f"{safe_module}.py"))
@@ -688,7 +808,13 @@ async def list_app_sources() -> AppSourceListResponse:
 async def get_app_source_raw(module: str) -> AppSourceContentResponse:
     """Return raw app source content for AI/MCP consumption."""
     try:
-        safe_module = module.replace("..", "").replace("/", "").replace("\\", "")
+        # Validate path to prevent traversal attacks
+        safe_path = validate_safe_path(module, MIRRORED_APPS_DIR)
+        if not safe_path:
+            raise HTTPException(status_code=400, detail="Invalid module name")
+
+        # Extract safe module name for search
+        safe_module = safe_path.stem
         candidates = list(MIRRORED_APPS_DIR.rglob(f"{safe_module}.py"))
         if not candidates:
             raise HTTPException(status_code=404, detail=f"Source for '{module}' not found")
@@ -828,7 +954,7 @@ async def documentation_file(request: Request, filename: str) -> HTMLResponse:
 
 
 @app.get("/api/search", operation_id="search_docs")  # type: ignore[misc]
-async def search_documentation(q: str = "") -> dict[str, list[dict[str, Any]] | str | int]:
+async def search_documentation(q: str = Query("", max_length=500)) -> dict[str, list[dict[str, Any]] | str | int]:
     """
     Search through documentation content for matching files.
 

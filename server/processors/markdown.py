@@ -1,12 +1,16 @@
 """Markdown processor for rendering documentation with caching."""
 
 import logging
+import os
 import threading
 from collections import OrderedDict
 
 import markdown
 
 logger = logging.getLogger(__name__)
+
+# Security: Maximum file size to prevent DoS attacks (10MB)
+MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
 
 # Markdown configuration for optimal rendering
 MARKDOWN_EXTENSIONS = [
@@ -67,6 +71,14 @@ class MarkdownProcessor:
                     # Update access order for LRU
                     self._cache.move_to_end(cache_key)
                     return self._cache[cache_key]
+
+            # Check file size before reading to prevent DoS attacks
+            try:
+                file_size = os.path.getsize(file_path)
+                if file_size > MAX_FILE_SIZE_BYTES:
+                    raise ValueError(f"File {file_path} is too large ({file_size} bytes, max {MAX_FILE_SIZE_BYTES})")
+            except OSError as e:
+                raise ValueError(f"Cannot access file {file_path}: {e}") from e
 
             # Read and render outside of lock for I/O, but protect the shared Markdown instance
             with open(file_path, encoding="utf-8") as f:
