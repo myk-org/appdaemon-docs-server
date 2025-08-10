@@ -119,7 +119,7 @@ class MarkdownProcessor:
 
                 # Reset markdown instance for clean processing
                 self.md.reset()
-                html_content = str(self.md.convert(content))
+                html_content = self.md.convert(content)
 
                 # Cache the result with true LRU eviction
                 if len(self._cache) >= self._max_cache_size:

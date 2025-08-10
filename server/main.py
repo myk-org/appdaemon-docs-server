@@ -6,17 +6,17 @@ markdown rendering, syntax highlighting, and responsive UI.
 """
 
 import asyncio
+import html
+import json
 import logging
 import os
 import re
+import shutil
+import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
-import html
-import time
-import shutil
-import resource
 
 import uvicorn
 from dotenv import load_dotenv
@@ -24,10 +24,9 @@ from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSoc
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from fastapi_mcp import FastApiMCP
-from pygments.formatters import HtmlFormatter
 from pygments import highlight
+from pygments.formatters import HtmlFormatter
 from pygments.lexers import PythonLexer
-import json
 from pydantic import BaseModel
 from starlette.middleware.gzip import GZipMiddleware
 
@@ -44,6 +43,14 @@ from server.utils.utils import (
 )
 from server.watchers.file_watcher import FileWatcher, WatchConfig
 from server.websocket.websocket_manager import EventType, WebSocketEvent, websocket_manager
+
+# Import resource module with Windows compatibility
+resource: Any = None
+try:
+    import resource
+except ImportError:
+    # resource module is not available on Windows
+    pass
 
 # Load environment variables from .env file
 load_dotenv()
@@ -94,6 +101,11 @@ def configure_resource_limits() -> dict[str, Any]:
     """
     limits_info: dict[str, Any] = {}
 
+    if resource is None:
+        limits_info["status"] = "not_available"
+        limits_info["reason"] = "resource module not available on this platform"
+        return limits_info
+
     try:
         # Set reasonable file descriptor limits
         soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
@@ -135,6 +147,9 @@ def get_resource_usage() -> dict[str, Any]:
     Returns:
         Dictionary with resource usage information
     """
+    if resource is None:
+        return {"status": "not_available", "reason": "resource module not available on this platform"}
+
     try:
         usage = resource.getrusage(resource.RUSAGE_SELF)
         return {

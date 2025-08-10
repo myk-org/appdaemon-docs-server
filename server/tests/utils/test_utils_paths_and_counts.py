@@ -23,8 +23,8 @@ def test_check_external_apps_dir_external_and_readonly(tmp_path, monkeypatch):
     other.mkdir()
     monkeypatch.chdir(other)
 
-    # Force write permission check to fail by patching Path.touch
-    with patch("pathlib.Path.touch", side_effect=PermissionError("ro")):
+    # Force write permission check to fail by patching tempfile.NamedTemporaryFile
+    with patch("server.utils.utils.tempfile.NamedTemporaryFile", side_effect=PermissionError("ro")):
         is_external, is_readonly = _check_external_apps_dir(apps)
         assert is_external is True
         assert is_readonly is True

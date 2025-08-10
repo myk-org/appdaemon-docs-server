@@ -166,20 +166,56 @@ class WebSocketManager:
 
         This prevents memory leaks from connections that closed without
         proper disconnect notification.
+
+        Uses concurrent asyncio tasks to send ping messages to all connections
+        simultaneously, preventing delays from slow or unresponsive connections.
         """
         if not self._connections:
             return
 
-        stale_connections = set()
-        for websocket in self._connections.copy():
+        # Create concurrent tasks for ping testing all connections
+        ping_tasks = []
+        connections_list = list(self._connections.copy())
+
+        async def ping_connection(websocket: WebSocket) -> tuple[WebSocket, bool]:
+            """Ping a single connection and return its status."""
             try:
                 # Try to send a lightweight ping message to check if connection is alive
                 # Starlette WebSocket doesn't have ping(), so we use send_json instead
                 ping_message = {"type": "ping", "timestamp": time.time()}
                 await asyncio.wait_for(websocket.send_json(ping_message), timeout=5.0)
+                return websocket, True  # Connection is alive
             except Exception:
-                # Connection is stale, mark for removal
-                stale_connections.add(websocket)
+                return websocket, False  # Connection is stale
+
+        # Create tasks for all connections
+        for websocket in connections_list:
+            task = asyncio.create_task(ping_connection(websocket))
+            ping_tasks.append(task)
+
+        if not ping_tasks:
+            return
+
+        # Wait for all ping tasks to complete concurrently
+        stale_connections = set()
+        try:
+            results = await asyncio.gather(*ping_tasks, return_exceptions=True)
+
+            for result in results:
+                if isinstance(result, Exception):
+                    # Task failed with exception, skip this result
+                    continue
+
+                # result should be a tuple of (websocket, is_alive)
+                if isinstance(result, tuple) and len(result) == 2:
+                    websocket, is_alive = result
+                    if not is_alive:
+                        stale_connections.add(websocket)
+
+        except Exception as e:
+            self.logger.error(f"Error during concurrent ping testing: {e}")
+            # Fallback: treat all connections as potentially stale if gather fails
+            return
 
         if stale_connections:
             self.logger.info(f"Removing {len(stale_connections)} stale WebSocket connections")

@@ -3,6 +3,7 @@
 import logging
 import os
 import sys
+import tempfile
 import yaml  # type: ignore[import-untyped]
 from pathlib import Path
 from typing import Any
@@ -225,9 +226,9 @@ def _check_external_apps_dir(apps_dir: Path) -> tuple[bool, bool]:
         if apps_dir.exists():
             try:
                 # Try to create a temporary file to test write permissions
-                test_file = apps_dir / ".write_test_temp"
-                test_file.touch()
-                test_file.unlink()  # Clean up
+                # Using tempfile.NamedTemporaryFile ensures unique names and proper cleanup
+                with tempfile.NamedTemporaryFile(dir=apps_dir, delete=True):
+                    pass  # File is automatically created and deleted
             except (PermissionError, OSError):
                 is_readonly = True
 

@@ -73,14 +73,27 @@ docker run -d \
   appdaemon-docs-server
 ```
 
-**Windows Users:** Use forward slashes and proper drive mapping:
+**Windows Users:** Path syntax varies by shell:
+
+**Git Bash/WSL/MSYS:**
 ```bash
-# Windows example
+# Windows with Git Bash/WSL
 docker run -d \
   --name appdaemon-docs \
   -p 8080:8080 \
   -e APPS_DIR=/app/appdaemon-apps \
   -v //c/Users/username/appdaemon/apps:/app/appdaemon-apps:ro \
+  appdaemon-docs-server
+```
+
+**PowerShell/CMD:**
+```powershell
+# Windows PowerShell/CMD
+docker run -d `
+  --name appdaemon-docs `
+  -p 8080:8080 `
+  -e APPS_DIR=/app/appdaemon-apps `
+  -v C:/Users/username/appdaemon/apps:/app/appdaemon-apps:ro `
   appdaemon-docs-server
 ```
 
@@ -141,13 +154,13 @@ All configuration is handled through environment variables:
 | `WATCH_DEBOUNCE_DELAY` | `2.0`      | Delay before processing file changes (seconds)  |
 | `WATCH_MAX_RETRIES`    | `3`        | Maximum retry attempts for failed generations   |
 | `WATCH_FORCE_REGENERATE` | `false`  | Force regenerate on file changes                |
-| `WATCH_LOG_LEVEL`      | `INFO`     | File watcher log level                           |
-| `RECURSIVE_SCAN`       | `false`    | Scan and watch nested subdirectories for .py files |
-| `MARKDOWN_CACHE_SIZE`  | `128`      | Maximum number of markdown files to cache in memory |
+| `WATCH_LOG_LEVEL`      | `info`     | File watcher log level (debug, info, warning, error) |
+| `RECURSIVE_SCAN`       | `false`    | Scan and watch nested subdirectories for .py files (increases CPU usage and file handles) |
+| `MARKDOWN_CACHE_SIZE`  | `128`      | Maximum number of markdown files to cache in memory (higher values increase RAM usage but improve performance) |
 | `APP_TITLE`            | `AppDaemon Documentation Server` | Application title |
 | `APP_DESCRIPTION`      | `Web interface for AppDaemon...` | Application description |
-| `APP_ENV`              | `production` | Runtime environment (production/development/dev/debug) |
-| `EXPOSE_ABS_PATHS_IN_API` | `false` | Include absolute filesystem paths in API responses (requires APP_ENV=development) |
+| `APP_ENV`              | `production` | Runtime environment - accepted values: `production` (default, security hardened), `development`/`dev`/`debug` (enables debug features) |
+| `EXPOSE_ABS_PATHS_IN_API` | `false` | Include absolute filesystem paths in API responses (only works when APP_ENV=development/dev/debug) |
 
 ## How It Works
 
@@ -371,10 +384,17 @@ environment:
   - FORCE_REGENERATE=false       # Faster startup times
   - LOG_LEVEL=warning            # Reduce log verbosity
   - MARKDOWN_CACHE_SIZE=256      # Increase cache for better performance with large doc sets
+  - RECURSIVE_SCAN=false         # Disable deep directory scanning for better performance
+  - WATCH_LOG_LEVEL=warning      # Reduce file watcher log verbosity
 ```
 
 ## Security Considerations
 
+- **Network Environment** - ⚠️ **This server must run in a local or trusted network environment only**
+  - Error logs may expose potentially sensitive information from AppDaemon configuration
+  - The `apps_config` object can contain secrets from `apps.yaml` including tokens, API keys, URLs, and other sensitive configuration data
+  - Do not expose this service to untrusted networks or the public internet
+  - Consider using VPN or private network access for remote monitoring
 - **Read-Only Mounts** - Always mount AppDaemon apps directory as read-only (`:ro`)
 - **Non-Root User** - Container runs as non-root user (UID 1000)
 - **Network Access** - Consider firewall rules for port 8080
@@ -384,10 +404,23 @@ environment:
   - Read-only vs read-write mount status
   - Security implications of external path usage
 - **Absolute Path Exposure** - Filesystem paths are protected in production environments:
-  - Set `EXPOSE_ABS_PATHS_IN_API=true` to include absolute paths in API responses
-  - Requires `APP_ENV=development` (or `dev`/`debug`) to prevent production path leakage
-  - Production environments (default `APP_ENV=production`) block absolute path exposure regardless of the EXPOSE_ABS_PATHS_IN_API setting
-  - This prevents potential information disclosure about server filesystem structure
+  - **Development Mode (Safe):** Set both `APP_ENV=development` and `EXPOSE_ABS_PATHS_IN_API=true` to include absolute paths in API responses for debugging
+  - **Production Mode (Secure):** Default `APP_ENV=production` blocks absolute path exposure regardless of `EXPOSE_ABS_PATHS_IN_API` setting
+  - **Security Gate:** The `APP_ENV` check is hard-disabled in production to prevent information disclosure about server filesystem structure
+
+  **Example - Safe Development Configuration:**
+  ```yaml
+  environment:
+    - APP_ENV=development              # Enables development features
+    - EXPOSE_ABS_PATHS_IN_API=true     # Shows absolute paths in API
+  ```
+
+  **Example - Secure Production Configuration:**
+  ```yaml
+  environment:
+    - APP_ENV=production               # Default, blocks absolute paths
+    - EXPOSE_ABS_PATHS_IN_API=false    # Ignored in production anyway
+  ```
 
 ## Troubleshooting
 
@@ -420,7 +453,7 @@ Enable detailed logging for troubleshooting:
 ```yaml
 environment:
   - LOG_LEVEL=debug
-  - WATCH_LOG_LEVEL=DEBUG
+  - WATCH_LOG_LEVEL=debug
 ```
 
 
