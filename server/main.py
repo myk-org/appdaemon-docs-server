@@ -77,7 +77,7 @@ def validate_safe_path(user_input: str, base_dir: Path) -> Path | None:
     try:
         # Strict validation: only allow alphanumeric characters and underscores
         # This prevents all forms of path traversal including encoded attacks
-        if not re.match(r"^[A-Za-z0-9_]+$", user_input):
+        if not re.fullmatch(r"[A-Za-z0-9_]+", user_input):
             logger.warning(f"Invalid path input rejected: {user_input!r}")
             return None
 
@@ -582,7 +582,7 @@ async def add_security_headers(request: Request, call_next: Any) -> Response:
     response.headers.setdefault(
         "Content-Security-Policy",
         "default-src 'self' https:; script-src 'self' 'unsafe-inline' https:; "
-        "style-src 'self' 'unsafe-inline' https:; img-src 'self' data: https:; connect-src 'self'",
+        "style-src 'self' 'unsafe-inline' https:; img-src 'self' data: https:; connect-src 'self' ws: wss:",
     )
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
@@ -805,8 +805,8 @@ async def get_app_source(module: str, fmt: str = Query("text"), theme: str = Que
             # Scope style to this viewer only
             scoped_css = formatter.get_style_defs(f"#{container_id} .highlight")
             highlighted = highlight(content, PythonLexer(), formatter)
-            html = f'<style>{scoped_css}</style><div id="{container_id}">{highlighted}</div>'
-            return HTMLResponse(content=html)
+            html_content = f'<style>{scoped_css}</style><div id="{container_id}">{highlighted}</div>'
+            return HTMLResponse(content=html_content)
 
         return Response(content=content, media_type="text/plain; charset=utf-8")
     except HTTPException:

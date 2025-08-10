@@ -487,8 +487,9 @@ class WebSocketManager:
                 await asyncio.sleep(300)  # 5 minutes
                 await self.periodic_cleanup()
             except asyncio.CancelledError:
-                # Re-raise CancelledError to allow proper task cancellation during shutdown
-                raise
+                # Log cancellation and exit loop cleanly to avoid noisy tracebacks
+                self.logger.info("Periodic cleanup loop cancelled, shutting down")
+                break
             except Exception as e:
                 self.logger.error(f"Error during periodic cleanup: {e}")
                 # Continue the loop even if cleanup fails
