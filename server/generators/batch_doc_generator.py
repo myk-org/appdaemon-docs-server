@@ -280,7 +280,7 @@ class BatchDocGenerator:
         index_content += "## Documentation Generation\n\n"
         index_content += "This documentation is automatically generated from Python source code using:\n\n"
         index_content += "- **Parser**: AST-based Python code analysis\n"
-        index_content += "- **Diagrams**: Cytoscape.js (with optional code2flow/pyan3 extraction)\n"
+        index_content += "- **Diagrams**: Cytoscape.js (with optional code2flow extraction)\n"
         index_content += "- **Templates**: Standardized markdown structure\n\n"
         index_content += "To regenerate documentation:\n\n"
         index_content += "### Local Development\n"

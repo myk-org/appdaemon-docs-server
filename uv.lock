@@ -216,7 +216,6 @@ dev = [
 ]
 flow-extract = [
     { name = "code2flow" },
-    { name = "pyan3" },
 ]
 
 [package.dev-dependencies]
@@ -246,7 +245,6 @@ requires-dist = [
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "markdown", specifier = ">=3.8.2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
-    { name = "pyan3", marker = "extra == 'flow-extract'", specifier = ">=1.2.0" },
     { name = "pygments", specifier = ">=2.19.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.20.0" },
@@ -788,18 +786,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/cd/05/0a34433a064256a578f1783a10da6df098ceaa4a57bbeaa96a6c0352786b/pure_eval-0.2.3.tar.gz", hash = "sha256:5f4e983f40564c576c7c8635ae88db5956bb2229d7e9237d03b3c0b0190eaf42", size = 19752, upload-time = "2024-07-21T12:58:21.801Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8e/37/efad0257dc6e593a18957422533ff0f87ede7c9c6ea010a2177d738fb82f/pure_eval-0.2.3-py3-none-any.whl", hash = "sha256:1db8e35b67b3d218d818ae653e27f06c3aa420901fa7b081ca98cbedc874e0d0", size = 11842, upload-time = "2024-07-21T12:58:20.04Z" },
-]
-
-[[package]]
-name = "pyan3"
-version = "1.2.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "jinja2" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/8f/8e/340533f6c084a53705527735e7db521756a10b297841671ee4042c5b281a/pyan3-1.2.0.tar.gz", hash = "sha256:36b49b678820e882de7271fb8a18789d57cd1e284f0314bdecd587f02c049a19", size = 49721, upload-time = "2021-02-11T13:22:25.838Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/34/f8/73460b7ac0650feec0601c3c24fd1ced4d986eecc447236464ae487fab10/pyan3-1.2.0-py3-none-any.whl", hash = "sha256:89b4d7b3003b794fb9b041b08da91bcbd1dde4c82ec4af039b1e6b8f418efab1", size = 50561, upload-time = "2021-02-11T13:22:23.898Z" },
 ]
 
 [[package]]

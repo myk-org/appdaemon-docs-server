@@ -45,7 +45,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["mypy>=1.0.0", "ruff>=0.1.0", "pytest>=8.4", "pytest-asyncio>=0.20.0"]
-flow_extract = ["code2flow>=2.5.0", "pyan3>=1.2.0"]
+flow_extract = ["code2flow>=2.5.0"]
 
 [tool.ruff]
 preview = true

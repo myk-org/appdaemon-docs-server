@@ -3,7 +3,6 @@ Adapters for extracting control-flow/call-graph information from mature tools.
 
 We integrate with:
 - code2flow: function/method-level control-flow summaries (DOT output)
-- pyan3: project/class-level call graphs (DOT output)
 
 All integrations are optional. If a tool is not installed, the adapter returns None.
 This ensures the server runs without extra dependencies while allowing enhanced
