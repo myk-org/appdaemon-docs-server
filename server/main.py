@@ -600,9 +600,10 @@ class FilesResponse(BaseModel):  # type: ignore[misc]
     files: list[dict[str, Any]]
     total_count: int
     docs_available: bool
-    docs_directory: str
+    docs_directory: str | None = None
     limit: int | None = None
     offset: int | None = None
+    module_data: dict[str, Any] | None = None
 
 
 class HealthResponse(BaseModel):  # type: ignore[misc]
@@ -715,6 +716,11 @@ async def list_documentation_files(
     try:
         files = await docs_service.get_file_list()
         total = len(files)
+
+        # Get module categorization for filtering
+        doc_stems = [str(file.get("stem", Path(str(file["name"])).stem)) for file in files]
+        app_counts = count_active_apps(REAL_APPS_DIR, doc_stems=doc_stems)
+
         if offset is not None or limit is not None:
             start = offset or 0
             end = start + (limit or total)
@@ -727,9 +733,18 @@ async def list_documentation_files(
             files=sanitized_files,
             total_count=total,
             docs_available=DOCS_DIR.exists(),
-            docs_directory=str(DOCS_DIR),
+            docs_directory=str(DOCS_DIR) if EXPOSE_ABS_PATHS_IN_API else None,
             limit=limit,
             offset=offset,
+            # Add module categorization for client-side filtering
+            module_data={
+                "active_modules": app_counts.get("active_modules", []),
+                "inactive_modules": app_counts.get("inactive_modules", []),
+                "all_modules": app_counts.get("all_modules", []),
+                "active_count": app_counts.get("active", 0),
+                "inactive_count": app_counts.get("inactive", 0),
+                "total_count": app_counts.get("total", 0),
+            },
         )
     except Exception as e:
         logger.error(f"Error listing files: {e}")
@@ -926,23 +941,40 @@ async def documentation_index(request: Request) -> HTMLResponse:
     try:
         files = await docs_service.get_file_list()
 
-        # Filter to only apps configured in apps.yaml (read from real apps dir)
+        # Get module categorization for active/inactive filtering
         doc_stems = [str(file.get("stem", Path(str(file["name"])).stem)) for file in files]
         app_counts = count_active_apps(REAL_APPS_DIR, doc_stems=doc_stems)
-        active_modules_value = app_counts.get("active_modules", [])
-        active_modules = set(active_modules_value if isinstance(active_modules_value, list) else [])
-        files = [f for f in files if str(f.get("stem")) in active_modules]
+
+        # Extract module lists for client-side filtering
+        active_modules = app_counts.get("active_modules", [])
+        inactive_modules = app_counts.get("inactive_modules", [])
+        all_modules = app_counts.get("all_modules", [])
+
+        # Ensure we have valid lists
+        active_modules = active_modules if isinstance(active_modules, list) else []
+        inactive_modules = inactive_modules if isinstance(inactive_modules, list) else []
+        all_modules = all_modules if isinstance(all_modules, list) else []
+
+        # Default to showing only active modules initially (preserves current behavior)
+        active_modules_set = set(active_modules)
+        filtered_files = [f for f in files if str(f.get("stem")) in active_modules_set]
 
         return templates.TemplateResponse(
             request,
             "index.html",
             {
                 "title": "AppDaemon Documentation",
-                "files": files,
-                # Only configured apps are shown, so total_files reflects configured apps count
-                "total_files": len(files),
-                # Provide active modules for client-side filtering on dynamic refresh
-                "active_modules": sorted(list(active_modules)),
+                "files": filtered_files,  # Default to active modules for initial load
+                "all_files": files,  # Provide all files for client-side filtering
+                "total_files": len(filtered_files),
+                # Provide module categorization for client-side filtering
+                "active_modules": sorted(active_modules),
+                "inactive_modules": sorted(inactive_modules),
+                "all_modules": sorted(all_modules),
+                # Provide counts for UI display
+                "active_count": len(active_modules),
+                "inactive_count": len(inactive_modules),
+                "total_count": len(all_modules),
             },
         )
     except Exception as e:
@@ -1010,7 +1042,8 @@ async def search_documentation(q: str = Query("", max_length=500)) -> dict[str, 
         for file_path in DOCS_DIR.glob("*.md"):
             try:
                 with open(file_path, encoding="utf-8") as f:
-                    content = f.read().lower()
+                    original_content = f.read()
+                    content = original_content.lower()
 
                 # Calculate relevance score
                 title_match = query in file_path.stem.lower().replace("_", " ").replace("-", " ")
@@ -1025,11 +1058,19 @@ async def search_documentation(q: str = Query("", max_length=500)) -> dict[str, 
                         if start_pos != -1:
                             context_start = max(0, start_pos - 100)
                             context_end = min(len(content), start_pos + len(query) + 100)
-                            raw = content[context_start:context_end].strip()
-                            # Escape HTML to prevent injection in UI, then highlight query
+                            # Extract from original content to preserve case
+                            raw = original_content[context_start:context_end].strip()
+                            # Escape HTML to prevent injection in UI
                             escaped = html.escape(raw)
-                            # Highlight the search term (case-insensitive match on escaped text is tricky; use original query lower)
-                            context = escaped.replace(html.escape(query), f"<mark>{html.escape(query)}</mark>")
+                            # Highlight the search term using case-insensitive regex on first occurrence
+                            pattern = re.escape(query)
+                            context = re.sub(
+                                f"({pattern})",
+                                r"<mark>\1</mark>",
+                                escaped,
+                                count=1,  # Only highlight first occurrence
+                                flags=re.IGNORECASE,
+                            )
 
                     title = await docs_service.extract_title(file_path)
 
@@ -1438,7 +1479,7 @@ def main() -> None:
         WATCH_DEBOUNCE_DELAY: File watcher debounce delay in seconds (default: 2.0)
         WATCH_MAX_RETRIES: Maximum retry attempts for failed generations (default: 3)
         WATCH_FORCE_REGENERATE: Force regenerate on file changes (default: false)
-        WATCH_LOG_LEVEL: File watcher log level (default: INFO)
+        WATCH_LOG_LEVEL: File watcher log level (default: info)
     """
     # Get configuration from centralized utilities
     server_config = get_server_config()

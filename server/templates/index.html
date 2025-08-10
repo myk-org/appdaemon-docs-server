@@ -781,6 +781,17 @@
         <div class="view-controls">
             <div class="stats">
                 <strong>{{ total_files }}</strong> apps configured
+                <div style="display: flex; gap: 10px; margin-top: 8px;">
+                    <button class="filter-button active" data-filter="active" title="Show Active Apps">
+                        Active ({{ active_count }})
+                    </button>
+                    <button class="filter-button" data-filter="inactive" title="Show Inactive Apps">
+                        Inactive ({{ inactive_count }})
+                    </button>
+                    <button class="filter-button" data-filter="all" title="Show All Apps">
+                        All ({{ total_count }})
+                    </button>
+                </div>
             </div>
             <div style="display: flex; gap: 10px; align-items: center;">
                 <button id="regenerateAllBtn" class="regenerate-button" title="Regenerate All Documentation"
@@ -799,7 +810,7 @@
             </div>
         </div>
 
-        {% if files %}
+        {% if all_files %}
         <!-- Grid View -->
         <div class="file-grid active" id="fileGrid">
             {% for file in files %}
@@ -847,61 +858,89 @@
     </div>
 
     <script>
-        // App filtering data
-        const activeModules = JSON.parse('{{ (active_modules | default(none)) | tojson | safe }}');
+        // App filtering data from backend
+        const activeModules = JSON.parse('{{ (active_modules | default([])) | tojson | safe }}');
+        const inactiveModules = JSON.parse('{{ (inactive_modules | default([])) | tojson | safe }}');
+        const allModules = JSON.parse('{{ (all_modules | default([])) | tojson | safe }}');
+        const allFiles = JSON.parse('{{ (all_files | default([])) | tojson | safe }}');
 
         // App filtering functionality
         function filterApps(filterType) {
             const fileCards = document.querySelectorAll('.file-card, .file-list-item');
-            let visibleModules = Array.isArray(activeModules) ? activeModules : [];
+            let visibleModules = [];
+
+            // Determine which modules to show based on filter type
+            // Use window globals if available (updated by WebSocket), otherwise use template data
+            const currentActiveModules = window.activeModules || activeModules;
+            const currentInactiveModules = window.inactiveModules || inactiveModules;
+            const currentAllModules = window.allModules || allModules;
+
+            switch (filterType) {
+                case 'active':
+                    visibleModules = Array.isArray(currentActiveModules) ? currentActiveModules : [];
+                    break;
+                case 'inactive':
+                    visibleModules = Array.isArray(currentInactiveModules) ? currentInactiveModules : [];
+                    break;
+                case 'all':
+                    visibleModules = Array.isArray(currentAllModules) ? currentAllModules : [];
+                    break;
+                default:
+                    visibleModules = Array.isArray(currentActiveModules) ? currentActiveModules : [];
+            }
 
             // Show/hide cards based on filter
             fileCards.forEach(card => {
                 const module = card.dataset.module;
-                if (filterType === 'all' || (Array.isArray(visibleModules) && visibleModules.includes(module))) {
+                if (visibleModules.includes(module)) {
                     card.style.display = '';
                 } else {
                     card.style.display = 'none';
                 }
             });
 
-            // Update stats if needed
-            updateFilterStats(filterType);
+            // Update filter button states
+            updateFilterButtons(filterType);
+
+            // Update stats
+            updateFilterStats(filterType, visibleModules.length);
         }
 
-        function updateFilterStats(filterType) {
+        function updateFilterButtons(filterType) {
+            // Update active state of filter buttons
+            document.querySelectorAll('.filter-button').forEach(btn => {
+                btn.classList.remove('active');
+                if (btn.getAttribute('data-filter') === filterType) {
+                    btn.classList.add('active');
+                }
+            });
+        }
+
+        function updateFilterStats(filterType, visibleCount) {
             const statsElement = document.querySelector('.stats strong');
             if (!statsElement) return;
 
+            // Use the provided count if available, otherwise fall back to counting visible elements
+            if (typeof visibleCount === 'number') {
+                statsElement.textContent = String(visibleCount);
+                return;
+            }
+
+            // Fallback: count visible elements in DOM
             const grid = document.getElementById('fileGrid');
             const list = document.getElementById('fileList');
 
-            const isElementVisible = (el) => {
-                if (!el) return false;
-                const style = window.getComputedStyle(el);
-                return el.offsetParent !== null && style.display !== 'none' && style.visibility !== 'hidden';
-            };
-
-            const getActiveContainer = () => {
-                if (grid && grid.classList.contains('active') && isElementVisible(grid)) return grid;
-                if (list && list.classList.contains('active') && isElementVisible(list)) return list;
-                if (grid && isElementVisible(grid)) return grid;
-                if (list && isElementVisible(list)) return list;
-                return null;
-            };
-
-            const countVisibleChildren = (container) => {
+            const countVisibleInContainer = (container, selector) => {
                 if (!container) return 0;
-                const selector = container.id === 'fileGrid' ? '.file-card' : '.file-list-item';
-                return Array.from(container.querySelectorAll(selector)).filter(isElementVisible).length;
+                return Array.from(container.querySelectorAll(selector))
+                    .filter(el => el.style.display !== 'none').length;
             };
 
-            const activeContainer = getActiveContainer();
-            const visibleCount = activeContainer
-                ? countVisibleChildren(activeContainer)
-                : (countVisibleChildren(grid) + countVisibleChildren(list));
+            const gridCount = countVisibleInContainer(grid, '.file-card');
+            const listCount = countVisibleInContainer(list, '.file-list-item');
+            const totalVisible = Math.max(gridCount, listCount); // They should be the same
 
-            statsElement.textContent = String(visibleCount);
+            statsElement.textContent = String(totalVisible);
         }
 
         // WebSocket Real-time Updates
@@ -1210,8 +1249,27 @@
                         data.files.forEach(f => list.appendChild(buildListItem(f)));
                     }
 
-                    // Always filter to configured (active) modules and update stats accordingly
-                    filterApps('active');
+                    // Update module data if provided
+                    if (data.module_data) {
+                        // Update global module arrays
+                        window.activeModules = data.module_data.active_modules || [];
+                        window.inactiveModules = data.module_data.inactive_modules || [];
+                        window.allModules = data.module_data.all_modules || [];
+
+                        // Update filter button counts
+                        const activeBtn = document.querySelector('[data-filter="active"]');
+                        const inactiveBtn = document.querySelector('[data-filter="inactive"]');
+                        const allBtn = document.querySelector('[data-filter="all"]');
+
+                        if (activeBtn) activeBtn.textContent = `Active (${data.module_data.active_count || 0})`;
+                        if (inactiveBtn) inactiveBtn.textContent = `Inactive (${data.module_data.inactive_count || 0})`;
+                        if (allBtn) allBtn.textContent = `All (${data.module_data.total_count || 0})`;
+                    }
+
+                    // Preserve current filter state instead of always defaulting to active
+                    const currentActiveFilter = document.querySelector('.filter-button.active');
+                    const currentFilterType = currentActiveFilter ? currentActiveFilter.getAttribute('data-filter') : 'active';
+                    filterApps(currentFilterType);
                 } catch (error) {
                     console.error('Error refreshing file list:', error);
                 }
@@ -1517,9 +1575,17 @@
 
         // Filter functionality
         document.addEventListener('DOMContentLoaded', function() {
-            // Apply initial filter to only show configured (active) modules
-                    filterApps('active');
+            // Add event listeners for filter buttons
+            document.querySelectorAll('.filter-button').forEach(button => {
+                button.addEventListener('click', function() {
+                    const filterType = this.getAttribute('data-filter');
+                    filterApps(filterType);
                 });
+            });
+
+            // Apply initial filter to only show configured (active) modules
+            filterApps('active');
+        });
 
         // Browse App Sources (modal with clickable files -> read-only viewer)
         document.addEventListener('DOMContentLoaded', function() {

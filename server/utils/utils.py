@@ -103,9 +103,10 @@ def count_active_apps(
 
         # Validate that YAML loaded content is a dictionary
         if not isinstance(apps_config, dict):
+            # Security: Don't log YAML content as it may contain PII/secrets
             error_msg = (
                 f"Invalid apps.yaml format: expected dictionary, got {type(apps_config).__name__}. "
-                f"Content: {apps_config}"
+                f"File: {apps_yaml_path}"
             )
             logging.error(error_msg)
             raise ValueError(error_msg)

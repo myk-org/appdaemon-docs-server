@@ -97,6 +97,8 @@ class WebSocketManager:
             "current_connections": 0,
             "events_sent": 0,
             "broadcast_errors": 0,
+            "cleanup_runs": 0,
+            "stale_connections_removed": 0,
         }
 
         # SSE broker for Server-Sent Events subscribers
@@ -160,7 +162,7 @@ class WebSocketManager:
         except Exception as e:
             self.logger.error(f"Error handling WebSocket disconnection: {e}")
 
-    async def cleanup_stale_connections(self) -> None:
+    async def cleanup_stale_connections(self) -> int:
         """
         Remove stale WebSocket connections that are no longer responsive.
 
@@ -169,9 +171,12 @@ class WebSocketManager:
 
         Uses concurrent asyncio tasks to send ping messages to all connections
         simultaneously, preventing delays from slow or unresponsive connections.
+
+        Returns:
+            Number of stale connections removed
         """
         if not self._connections:
-            return
+            return 0
 
         # Create concurrent tasks for ping testing all connections
         ping_tasks = []
@@ -194,7 +199,7 @@ class WebSocketManager:
             ping_tasks.append(task)
 
         if not ping_tasks:
-            return
+            return 0
 
         # Wait for all ping tasks to complete concurrently
         stale_connections = set()
@@ -215,12 +220,16 @@ class WebSocketManager:
         except Exception as e:
             self.logger.error(f"Error during concurrent ping testing: {e}")
             # Fallback: treat all connections as potentially stale if gather fails
-            return
+            return 0
 
+        stale_count = len(stale_connections)
         if stale_connections:
-            self.logger.info(f"Removing {len(stale_connections)} stale WebSocket connections")
+            self.logger.info(f"Removing {stale_count} stale WebSocket connections")
             self._connections -= stale_connections
             self.stats["current_connections"] = len(self._connections)
+            self.stats["stale_connections_removed"] += stale_count
+
+        return stale_count
 
     async def handle_client_message(self, websocket: WebSocket, message: str) -> None:
         """
@@ -312,6 +321,14 @@ class WebSocketManager:
             await self._sse_broker.publish(event.to_dict())
         except Exception as e:
             self.logger.warning(f"Failed to publish event to SSE broker: {e}")
+            self.stats["broadcast_errors"] += 1
+
+            # Detect fail-fast condition: no WebSocket clients AND SSE failure
+            if successful_sends == 0:
+                self.logger.error(
+                    f"Critical broadcast failure: No WebSocket clients connected AND SSE publish failed. "
+                    f"Event {event.event_type.value} could not be delivered to any subscribers. Error: {e}"
+                )
 
         return successful_sends
 
@@ -419,6 +436,8 @@ class WebSocketManager:
             "total_connections": self.stats["total_connections"],
             "events_sent": self.stats["events_sent"],
             "broadcast_errors": self.stats["broadcast_errors"],
+            "cleanup_runs": self.stats["cleanup_runs"],
+            "stale_connections_removed": self.stats["stale_connections_removed"],
         }
 
     def get_stats(self) -> dict[str, Any]:
@@ -433,7 +452,16 @@ class WebSocketManager:
         This should be called periodically (e.g., every 5-10 minutes)
         to clean up stale connections and reset counters.
         """
-        await self.cleanup_stale_connections()
+        # Track cleanup runs for observability
+        self.stats["cleanup_runs"] += 1
+
+        stale_removed = await self.cleanup_stale_connections()
+
+        # Log cleanup results for observability
+        if stale_removed > 0:
+            self.logger.info(f"Periodic cleanup removed {stale_removed} stale connections")
+        else:
+            self.logger.debug("Periodic cleanup completed - no stale connections found")
 
         # Reset event counter if it gets too large to prevent overflow
         if self._event_count > 1000000:
