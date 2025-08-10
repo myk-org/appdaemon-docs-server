@@ -789,16 +789,10 @@ async def get_app_source(module: str, fmt: str = Query("text"), theme: str = Que
         if not safe_path:
             raise HTTPException(status_code=400, detail="Invalid module name")
 
-        # Extract safe module name for search
+        # Construct path directly since validate_safe_path restricts to simple stems
         safe_module = safe_path.stem
-        source_path = None
-        # Search for matching file in MIRRORED_APPS_DIR
-        candidates = list(MIRRORED_APPS_DIR.rglob(f"{safe_module}.py"))
-        if candidates:
-            # Prefer root-level match; else pick first
-            candidates.sort(key=lambda p: len(p.parts))
-            source_path = candidates[0]
-        if source_path is None or not source_path.exists():
+        source_path = MIRRORED_APPS_DIR / f"{safe_module}.py"
+        if not source_path.exists():
             raise HTTPException(status_code=404, detail=f"Source for '{module}' not found")
 
         with open(source_path, "r", encoding="utf-8") as f:
@@ -853,13 +847,11 @@ async def get_app_source_raw(module: str) -> AppSourceContentResponse:
         if not safe_path:
             raise HTTPException(status_code=400, detail="Invalid module name")
 
-        # Extract safe module name for search
+        # Construct path directly since validate_safe_path restricts to simple stems
         safe_module = safe_path.stem
-        candidates = list(MIRRORED_APPS_DIR.rglob(f"{safe_module}.py"))
-        if not candidates:
+        source_path = MIRRORED_APPS_DIR / f"{safe_module}.py"
+        if not source_path.exists():
             raise HTTPException(status_code=404, detail=f"Source for '{module}' not found")
-        candidates.sort(key=lambda p: len(p.parts))
-        source_path = candidates[0]
         content = source_path.read_text(encoding="utf-8")
         resp_kwargs: dict[str, Any] = {
             "module": safe_module,

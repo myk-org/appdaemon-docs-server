@@ -115,7 +115,8 @@ def count_active_apps(
         active_modules = set()
         for app, config in apps_config.items():
             if isinstance(config, dict) and config.get("module"):
-                active_modules.add(config["module"])
+                # Normalize module to string to be defensive against non-string YAML values
+                active_modules.add(str(config["module"]))
 
         # Use set operations for efficient filtering
         doc_stems_set = set(doc_files)

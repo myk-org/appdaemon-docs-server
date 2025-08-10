@@ -430,7 +430,10 @@ class WebSocketManager:
         return len(self._connections)
 
     def get_connection_info(self) -> dict[str, Any]:
-        """Get detailed connection information."""
+        """Get detailed connection information including SSE drop metrics."""
+        # Get SSE drop metrics from the broker
+        sse_metrics = self._sse_broker.get_drop_metrics()
+
         return {
             "active_connections": len(self._connections),
             "total_connections": self.stats["total_connections"],
@@ -438,6 +441,11 @@ class WebSocketManager:
             "broadcast_errors": self.stats["broadcast_errors"],
             "cleanup_runs": self.stats["cleanup_runs"],
             "stale_connections_removed": self.stats["stale_connections_removed"],
+            # SSE metrics for observability
+            "sse_subscribers": sse_metrics["active_subscribers"],
+            "sse_total_drops": sse_metrics["total_drops"],
+            "sse_max_subscriber_drops": sse_metrics["max_subscriber_drops"],
+            "sse_min_subscriber_drops": sse_metrics["min_subscriber_drops"],
         }
 
     def get_stats(self) -> dict[str, Any]:
@@ -478,6 +486,9 @@ class WebSocketManager:
             try:
                 await asyncio.sleep(300)  # 5 minutes
                 await self.periodic_cleanup()
+            except asyncio.CancelledError:
+                # Re-raise CancelledError to allow proper task cancellation during shutdown
+                raise
             except Exception as e:
                 self.logger.error(f"Error during periodic cleanup: {e}")
                 # Continue the loop even if cleanup fails
@@ -493,16 +504,23 @@ class SSEBroker:
     def __init__(self) -> None:
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self._lock = asyncio.Lock()
+        # Drop metrics for observability
+        self._total_drops = 0
+        self._subscriber_drops: dict[int, int] = {}
 
     async def subscribe(self) -> asyncio.Queue[dict[str, Any]]:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=100)
         async with self._lock:
             self._subscribers.add(queue)
+            # Initialize drop counter for this subscriber
+            self._subscriber_drops[id(queue)] = 0
         return queue
 
     async def unsubscribe(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
         async with self._lock:
             self._subscribers.discard(queue)
+            # Clean up drop counter for this subscriber
+            self._subscriber_drops.pop(id(queue), None)
 
     async def publish(self, event: dict[str, Any]) -> None:
         async with self._lock:
@@ -512,10 +530,33 @@ class SSEBroker:
                 # Drop oldest if full to avoid blocking
                 if q.full():
                     _ = q.get_nowait()
+                    # Track drop metrics
+                    queue_id = id(q)
+                    self._subscriber_drops[queue_id] = self._subscriber_drops.get(queue_id, 0) + 1
+                    self._total_drops += 1
                 q.put_nowait(event)
             except Exception:
                 # Ignore individual subscriber errors
                 pass
+
+    def get_drop_metrics(self) -> dict[str, Any]:
+        """
+        Get SSE queue drop metrics for observability.
+
+        Returns:
+            Dictionary containing drop statistics
+        """
+        return {
+            "total_drops": self._total_drops,
+            "active_subscribers": len(self._subscribers),
+            "subscriber_drop_counts": list(self._subscriber_drops.values()),
+            "max_subscriber_drops": max(self._subscriber_drops.values()) if self._subscriber_drops else 0,
+            "min_subscriber_drops": min(self._subscriber_drops.values()) if self._subscriber_drops else 0,
+        }
+
+    def get_subscriber_count(self) -> int:
+        """Get current number of SSE subscribers."""
+        return len(self._subscribers)
 
 
 # Global WebSocket manager instance
