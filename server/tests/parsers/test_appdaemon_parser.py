@@ -63,7 +63,7 @@ class TestAutomation(hass.Hass):
         assert isinstance(parser.time_patterns, set)
         assert isinstance(parser.mqtt_patterns, set)
 
-    def test_parse_file_basic(self, parser, sample_automation_file):
+    def test_parse_file_happy_path(self, parser, sample_automation_file):
         """Test basic file parsing."""
         result = parser.parse_file(sample_automation_file)
 

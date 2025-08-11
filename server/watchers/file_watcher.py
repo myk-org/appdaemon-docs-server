@@ -10,6 +10,7 @@ import asyncio
 import logging
 import os
 import time
+import shutil
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,6 +21,7 @@ from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 from server.generators.batch_doc_generator import BatchDocGenerator
+from server.utils.progress_callbacks import ProgressCallbackManager
 from server.websocket.websocket_manager import websocket_manager, EventType
 
 
@@ -28,7 +30,10 @@ class WatchConfig:
     """Configuration for file watching behavior."""
 
     # Directory paths with robust defaults
+    # Real apps directory to watch for changes
     watch_directory: Path = field(default_factory=lambda: Path(os.getenv("APPS_DIR") or "/app/appdaemon-apps"))
+    # Directory used for generation (typically the mirrored/copied apps)
+    generation_directory: Path | None = None
     output_directory: Path = field(default_factory=lambda: Path(os.getenv("DOCS_DIR") or "/app/docs"))
 
     # File filtering
@@ -148,6 +153,24 @@ class FileWatchEventHandler(FileSystemEventHandler):  # type: ignore[misc]
         self.watcher = watcher
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
 
+    def _attach_future_logging(self, future: Any, context: str) -> None:
+        """Attach a done-callback that logs exceptions from the future.
+
+        This ensures errors raised inside background coroutines are not silently dropped.
+        """
+        try:
+
+            def _on_done(f: Any) -> None:
+                try:
+                    # Calling result() will re-raise any exception from the coroutine
+                    f.result()
+                except Exception as exc:  # noqa: BLE001 - we want to log any exception
+                    self.logger.error(f"Unhandled exception in background task ({context}): {exc}")
+
+            future.add_done_callback(_on_done)
+        except Exception as exc:  # Defensive: attaching callback itself should not break flow
+            self.logger.error(f"Failed to attach done callback for ({context}): {exc}")
+
     def on_modified(self, event: FileSystemEvent) -> None:
         """Handle file modification events."""
         if not event.is_directory:
@@ -171,10 +194,14 @@ class FileWatchEventHandler(FileSystemEventHandler):  # type: ignore[misc]
     def _handle_file_event(self, event: FileSystemEvent, event_type: str) -> None:
         """Process a file system event."""
         try:
-            file_path = Path(event.src_path)
+            file_path = Path(os.fsdecode(event.src_path))
 
             # Broadcast WebSocket event for all file changes (not just processed ones)
-            asyncio.create_task(self._broadcast_file_change(file_path, event_type))
+            if self.watcher.loop:
+                fut = asyncio.run_coroutine_threadsafe(
+                    self._broadcast_file_change(file_path, event_type), self.watcher.loop
+                )
+                self._attach_future_logging(fut, "broadcast_file_change")
 
             # Check if file should be processed
             if self.watcher._should_process_file(file_path):
@@ -183,7 +210,14 @@ class FileWatchEventHandler(FileSystemEventHandler):  # type: ignore[misc]
                 self.logger.debug(f"File {event_type}: {file_path}")
 
                 # Schedule debounced processing
-                asyncio.create_task(self.watcher._schedule_debounced_processing(file_event))
+                if self.watcher.loop:
+                    try:
+                        fut2 = asyncio.run_coroutine_threadsafe(
+                            self.watcher._schedule_debounced_processing(file_event), self.watcher.loop
+                        )
+                        self._attach_future_logging(fut2, "schedule_debounced_processing")
+                    except Exception as exc:  # noqa: BLE001 - we want to log any exception
+                        self.logger.error(f"Failed to schedule debounced processing: {exc}")
 
         except Exception as e:
             self.logger.error(f"Error handling file event: {e}")
@@ -239,8 +273,12 @@ class FileWatcher:
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(getattr(logging, self.config.log_level.upper()))
 
+        # Normalize generation directory (default to watch_directory when not specified)
+        if self.config.generation_directory is None:
+            self.config.generation_directory = self.config.watch_directory
+
         # Core components
-        self.batch_generator = BatchDocGenerator(self.config.watch_directory, self.config.output_directory)
+        self.batch_generator = BatchDocGenerator(self.config.generation_directory, self.config.output_directory)
 
         # Watchdog components
         self.observer = Observer()
@@ -250,6 +288,7 @@ class FileWatcher:
         self.debounce_handler = DebounceHandler(self.config.debounce_delay)
         self._processing_queue: asyncio.Queue[FileEvent] = asyncio.Queue()
         self._processing_task: asyncio.Task[None] | None = None
+        self.loop: asyncio.AbstractEventLoop | None = None
 
         # Status tracking
         self.is_watching = False
@@ -340,8 +379,12 @@ class FileWatcher:
         self.stats["total_events"] += 1
 
         try:
-            # Use asyncio.create_task to schedule the coroutine
-            asyncio.create_task(self._processing_queue.put(event))
+            if self.loop is not None:
+                asyncio.run_coroutine_threadsafe(self._processing_queue.put(event), self.loop)
+            else:
+                # Attempt to schedule on current running loop if available
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._processing_queue.put(event))
         except RuntimeError:
             # If no event loop is running, we'll handle this gracefully
             self.logger.warning("No event loop running, event will be processed when watcher starts")
@@ -364,6 +407,31 @@ class FileWatcher:
         """Process a single file event with retry logic."""
         file_path = event.file_path
         max_retries = self.config.max_retry_attempts
+
+        # Opportunistically sync source .py file for read-only viewing on create/modify
+        try:
+            if file_path.suffix == ".py" and event.event_type in {"created", "modified", "moved"}:
+                dest_base = Path(os.getenv("APP_SOURCES_DIR", "data/app-sources")).resolve()
+                excluded = {
+                    "const.py",
+                    "infra.py",
+                    "utils.py",
+                    "__init__.py",
+                    "apps.py",
+                    "configuration.py",
+                    "secrets.py",
+                }
+                if file_path.name not in excluded and file_path.exists():
+                    try:
+                        rel = file_path.relative_to(self.config.watch_directory)
+                    except ValueError:
+                        rel = Path(file_path.name)
+                    dest = dest_base / rel
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(file_path, dest)
+        except Exception as sync_err:
+            # Do not fail the main processing due to sync errors
+            self.logger.debug(f"Source sync skipped for {file_path}: {sync_err}")
 
         # Broadcast generation started event
         await websocket_manager.broadcast_batch_status(
@@ -500,8 +568,12 @@ class FileWatcher:
             # Scan existing files
             self._scan_existing_files()
 
-            # Set up watchdog observer
-            self.observer.schedule(self.event_handler, str(self.config.watch_directory), recursive=False)
+            # Record the running loop for cross-thread scheduling
+            self.loop = asyncio.get_running_loop()
+
+            # Set up watchdog observer (support recursive when env enables it)
+            recursive = os.getenv("RECURSIVE_SCAN", "false").lower() in ("true", "1", "yes", "on")
+            self.observer.schedule(self.event_handler, str(self.config.watch_directory), recursive=recursive)
 
             # Start processing task
             self._processing_task = asyncio.create_task(self._process_events())
@@ -585,18 +657,12 @@ class FileWatcher:
         )
 
         # Create progress callback for WebSocket broadcasting
-        async def progress_callback(current: int, total: int, current_file: str, stage: str) -> None:
-            await websocket_manager.broadcast_generation_progress(
-                current=current, total=total, current_file=current_file, stage=stage
-            )
-
-        # Use asyncio to handle the sync generator with async callback
-        def sync_progress_callback(current: int, total: int, current_file: str, stage: str) -> None:
-            asyncio.create_task(progress_callback(current, total, current_file, stage))
+        progress_manager = ProgressCallbackManager(websocket_manager)
 
         start_time = time.time()
         results: dict[str, Any] = self.batch_generator.generate_all_docs(
-            force_regenerate=force or self.config.force_regenerate, progress_callback=sync_progress_callback
+            force_regenerate=force or self.config.force_regenerate,
+            progress_callback=progress_manager.sync_progress_callback,
         )
         generation_time = time.time() - start_time
 

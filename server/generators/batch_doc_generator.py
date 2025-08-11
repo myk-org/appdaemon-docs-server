@@ -5,11 +5,17 @@ This module provides a command-line interface and batch processing capabilities
 for generating documentation for multiple AppDaemon automation files at once.
 """
 
+import os
 from pathlib import Path
 from typing import Any, Callable
 
 from server.generators.doc_generator import AppDaemonDocGenerator
 from server.parsers.appdaemon_parser import parse_appdaemon_file
+
+# NOTE: Shell-like paths (e.g., ~/appdaemon/apps) require expansion via os.path.expanduser()
+# or pathlib.Path.expanduser(). The server and dev runner should expand ~ and environment
+# variables before passing paths to this generator. Additionally, pointing APPS_DIR to
+# large directories or NFS-mounted filesystems may impact performance with file watching.
 
 
 class BatchDocGenerator:
@@ -30,14 +36,34 @@ class BatchDocGenerator:
         # Ensure docs directory exists
         self.docs_dir.mkdir(parents=True, exist_ok=True)
 
-    def find_automation_files(self) -> list[Path]:
+    @property
+    def apps_yaml_path(self) -> Path | None:
+        """
+        Get the apps.yaml path if it exists.
+
+        This property provides consistent access to the apps.yaml configuration file
+        and caches the result to avoid repeated file existence checks.
+
+        Returns:
+            Path to apps.yaml if it exists, None otherwise
+        """
+        if not hasattr(self, "_apps_yaml_path"):
+            apps_yaml_candidate = self.apps_dir / "apps.yaml"
+            self._apps_yaml_path = apps_yaml_candidate if apps_yaml_candidate.exists() else None
+        return self._apps_yaml_path
+
+    def find_automation_files(self, recursive: bool | None = None) -> list[Path]:
         """
         Find all AppDaemon automation Python files.
 
         Returns:
             List of Python file paths in the apps directory
         """
-        python_files = list(self.apps_dir.glob("*.py"))
+        # Allow recursive search via environment toggle or parameter
+        if recursive is None:
+            recursive = os.getenv("RECURSIVE_SCAN", "false").lower() in ("true", "1", "yes", "on")
+
+        python_files = list(self.apps_dir.rglob("*.py")) if recursive else list(self.apps_dir.glob("*.py"))
 
         # Filter out common non-automation files
         excluded_files = {
@@ -65,8 +91,8 @@ class BatchDocGenerator:
             Tuple of (documentation_content, success_flag)
         """
         try:
-            # Parse the file
-            parsed_file = parse_appdaemon_file(file_path)
+            # Parse the file with apps.yaml context
+            parsed_file = parse_appdaemon_file(file_path, apps_yaml_path=self.apps_yaml_path)
 
             # Generate documentation
             docs = self.doc_generator.generate_documentation(parsed_file)
@@ -177,7 +203,7 @@ class BatchDocGenerator:
 
         for file_path in automation_files:
             try:
-                parsed_file = parse_appdaemon_file(file_path)
+                parsed_file = parse_appdaemon_file(file_path, apps_yaml_path=self.apps_yaml_path)
                 total_classes += len(parsed_file.classes)
                 for class_info in parsed_file.classes:
                     total_listeners += len(class_info.state_listeners)
@@ -238,7 +264,7 @@ class BatchDocGenerator:
 
                 # Try to get a brief description
                 try:
-                    parsed_file = parse_appdaemon_file(file_path)
+                    parsed_file = parse_appdaemon_file(file_path, apps_yaml_path=self.apps_yaml_path)
                     if parsed_file.classes and parsed_file.classes[0].docstring:
                         description = parsed_file.classes[0].docstring.split("\n")[0]
                     else:
@@ -254,7 +280,7 @@ class BatchDocGenerator:
         index_content += "## Documentation Generation\n\n"
         index_content += "This documentation is automatically generated from Python source code using:\n\n"
         index_content += "- **Parser**: AST-based Python code analysis\n"
-        index_content += "- **Diagrams**: Mermaid flowcharts and architecture diagrams\n"
+        index_content += "- **Diagrams**: Cytoscape.js (with optional code2flow extraction)\n"
         index_content += "- **Templates**: Standardized markdown structure\n\n"
         index_content += "To regenerate documentation:\n\n"
         index_content += "### Local Development\n"

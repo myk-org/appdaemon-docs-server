@@ -223,7 +223,7 @@ class TestFileWatcherAdvanced:
             # Should have called the process method
             mock_process.assert_called_once()
 
-    def test_error_handling_edge_cases(self, watcher, temp_dirs):
+    def test_error_handling_when_batch_generation_fails(self, watcher, temp_dirs):
         """Test error handling for edge cases."""
         watch_dir, output_dir = temp_dirs
         watcher.config.watch_directory = watch_dir
@@ -292,7 +292,7 @@ class TestFileWatcherAdvanced:
             # Should schedule debounced processing for each file
             assert mock_schedule.call_count == len(files)
 
-    def test_debounce_handler_edge_cases(self, watcher):
+    def test_debounce_handler_cancel_and_reschedule(self, watcher):
         """Test debounce handler edge cases."""
         from server.watchers.file_watcher import DebounceHandler
 

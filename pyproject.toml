@@ -1,3 +1,27 @@
+[tool.pytest.ini_options]
+minversion = "8.0"
+asyncio_mode = "auto"
+addopts = [
+  "--strict-markers",
+  "--strict-config",
+  "--pdbcls=IPython.terminal.debugger:TerminalPdb",
+  "-ra",
+]
+
+[tool.coverage.run]
+omit = ["server/tests/**", "server/run-dev.py"]
+source = ["server"]
+parallel = true
+branch = true
+
+[tool.coverage.report]
+fail_under = 65
+skip_empty = true
+show_missing = true
+
+[tool.coverage.html]
+directory = ".tests_coverage"
+
 [project]
 name = "docs-server"
 version = "1.0.0"
@@ -9,16 +33,19 @@ dependencies = [
   "jinja2>=3.1.6",
   "markdown>=3.8.2",
   "pygments>=2.19.2",
+  "pyyaml>=6.0.0",
   "uvicorn[standard]>=0.35.0",
   "python-multipart>=0.0.6",
   "watchdog>=4.0.0",
   "websockets>=12.0",
   "rich>=13.0.0",
   "python-dotenv>=1.0.0",
+  "types-pyyaml>=6.0.12.20250516",
 ]
 
 [project.optional-dependencies]
-dev = ["mypy>=1.0.0", "ruff>=0.1.0", "pytest>=7.0.0", "pytest-asyncio>=0.20.0"]
+dev = ["mypy>=1.0.0", "ruff>=0.1.0", "pytest>=8.4", "pytest-asyncio>=0.20.0"]
+flow_extract = ["code2flow>=2.5.0"]
 
 [tool.ruff]
 preview = true
@@ -57,10 +84,11 @@ dev = [
   "ipython>=9.4.0",
   "types-markdown>=3.8.0.20250708",
   "types-pygments>=2.19.0.20250715",
+  "types-pyyaml>=6.0.12.20250516",
   "websockets>=15.0.1",
 ]
 tests = [
-  "pytest>=8.4.1",
+  "pytest>=8.4",
   "pytest-cov>=4.1.0",
   "playwright>=1.40.0",
   "pytest-playwright>=0.4.4",

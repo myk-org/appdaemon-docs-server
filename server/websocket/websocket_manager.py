@@ -12,8 +12,10 @@ import logging
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
+import time
 
 from fastapi import WebSocket, WebSocketDisconnect
+import asyncio
 
 
 class EventType(Enum):
@@ -40,6 +42,8 @@ class EventType(Enum):
     SYSTEM_STATUS = "system_status"
     WATCHER_STATUS = "watcher_status"
     SERVER_STATUS = "server_status"
+    # Connection lifecycle
+    CONNECTION_ESTABLISHED = "connection_established"
 
 
 @dataclass
@@ -53,8 +57,6 @@ class WebSocketEvent:
     def __post_init__(self) -> None:
         """Set timestamp if not provided."""
         if self.timestamp is None:
-            import time
-
             self.timestamp = time.time()
 
     def to_dict(self) -> dict[str, Any]:
@@ -95,7 +97,12 @@ class WebSocketManager:
             "current_connections": 0,
             "events_sent": 0,
             "broadcast_errors": 0,
+            "cleanup_runs": 0,
+            "stale_connections_removed": 0,
         }
+
+        # SSE broker for Server-Sent Events subscribers
+        self._sse_broker = SSEBroker()
 
     async def connect(self, websocket: WebSocket) -> None:
         """
@@ -124,6 +131,17 @@ class WebSocketManager:
             )
             await self._send_to_client(websocket, welcome_event)
 
+            # Also emit a dedicated connection-established event for clients that expect it
+            connection_event = WebSocketEvent(
+                event_type=EventType.CONNECTION_ESTABLISHED,
+                data={
+                    "message": "Connection established",
+                    "connection_id": self._connection_count,
+                    "active_connections": len(self._connections),
+                },
+            )
+            await self._send_to_client(websocket, connection_event)
+
         except Exception as e:
             self.logger.error(f"Error accepting WebSocket connection: {e}")
             self._connections.discard(websocket)
@@ -143,6 +161,75 @@ class WebSocketManager:
 
         except Exception as e:
             self.logger.error(f"Error handling WebSocket disconnection: {e}")
+
+    async def cleanup_stale_connections(self) -> int:
+        """
+        Remove stale WebSocket connections that are no longer responsive.
+
+        This prevents memory leaks from connections that closed without
+        proper disconnect notification.
+
+        Uses concurrent asyncio tasks to send ping messages to all connections
+        simultaneously, preventing delays from slow or unresponsive connections.
+
+        Returns:
+            Number of stale connections removed
+        """
+        if not self._connections:
+            return 0
+
+        # Create concurrent tasks for ping testing all connections
+        ping_tasks = []
+        connections_list = list(self._connections.copy())
+
+        async def ping_connection(websocket: WebSocket) -> tuple[WebSocket, bool]:
+            """Ping a single connection and return its status."""
+            try:
+                # Try to send a lightweight ping message to check if connection is alive
+                # Starlette WebSocket doesn't have ping(), so we use send_json instead
+                ping_message = {"type": "ping", "timestamp": time.time()}
+                await asyncio.wait_for(websocket.send_json(ping_message), timeout=5.0)
+                return websocket, True  # Connection is alive
+            except Exception:
+                return websocket, False  # Connection is stale
+
+        # Create tasks for all connections
+        for websocket in connections_list:
+            task = asyncio.create_task(ping_connection(websocket))
+            ping_tasks.append(task)
+
+        if not ping_tasks:
+            return 0
+
+        # Wait for all ping tasks to complete concurrently
+        stale_connections = set()
+        try:
+            results = await asyncio.gather(*ping_tasks, return_exceptions=True)
+
+            for result in results:
+                if isinstance(result, Exception):
+                    # Task failed with exception, skip this result
+                    continue
+
+                # result should be a tuple of (websocket, is_alive)
+                if isinstance(result, tuple) and len(result) == 2:
+                    websocket, is_alive = result
+                    if not is_alive:
+                        stale_connections.add(websocket)
+
+        except Exception as e:
+            self.logger.error(f"Error during concurrent ping testing: {e}")
+            # Fallback: treat all connections as potentially stale if gather fails
+            return 0
+
+        stale_count = len(stale_connections)
+        if stale_connections:
+            self.logger.info(f"Removing {stale_count} stale WebSocket connections")
+            self._connections -= stale_connections
+            self.stats["current_connections"] = len(self._connections)
+            self.stats["stale_connections_removed"] += stale_count
+
+        return stale_count
 
     async def handle_client_message(self, websocket: WebSocket, message: str) -> None:
         """
@@ -205,9 +292,6 @@ class WebSocketManager:
         Returns:
             Number of clients that received the event
         """
-        if not self._connections:
-            return 0
-
         successful_sends = 0
         failed_connections = set()
 
@@ -228,6 +312,23 @@ class WebSocketManager:
         if successful_sends > 0:
             self.stats["events_sent"] += successful_sends
             self.logger.debug(f"Broadcast event {event.event_type.value} to {successful_sends} clients")
+
+        # Increment event count for each broadcast (regardless of successful sends)
+        self._event_count += 1
+
+        # Also publish to SSE subscribers regardless of WebSocket clients
+        try:
+            await self._sse_broker.publish(event.to_dict())
+        except Exception as e:
+            self.logger.warning(f"Failed to publish event to SSE broker: {e}")
+            self.stats["broadcast_errors"] += 1
+
+            # Detect fail-fast condition: no WebSocket clients AND SSE failure
+            if successful_sends == 0:
+                self.logger.error(
+                    f"Critical broadcast failure: No WebSocket clients connected AND SSE publish failed. "
+                    f"Event {event.event_type.value} could not be delivered to any subscribers. Error: {e}"
+                )
 
         return successful_sends
 
@@ -285,6 +386,9 @@ class WebSocketManager:
         Returns:
             Number of clients notified
         """
+        # Compute percentage once and provide under both keys for compatibility
+        percentage = (current / total * 100) if total > 0 else 0
+
         event = WebSocketEvent(
             event_type=EventType.DOC_GENERATION_PROGRESS,
             data={
@@ -292,7 +396,8 @@ class WebSocketManager:
                 "total": total,
                 "current_file": current_file,
                 "stage": stage,
-                "progress_percentage": (current / total * 100) if total > 0 else 0,
+                "percentage": percentage,
+                "progress_percentage": percentage,
             },
         )
         return await self.broadcast(event)
@@ -325,18 +430,134 @@ class WebSocketManager:
         return len(self._connections)
 
     def get_connection_info(self) -> dict[str, Any]:
-        """Get detailed connection information."""
+        """Get detailed connection information including SSE drop metrics."""
+        # Get SSE drop metrics from the broker
+        sse_metrics = self._sse_broker.get_drop_metrics()
+
         return {
             "active_connections": len(self._connections),
             "total_connections": self.stats["total_connections"],
             "events_sent": self.stats["events_sent"],
             "broadcast_errors": self.stats["broadcast_errors"],
+            "cleanup_runs": self.stats["cleanup_runs"],
+            "stale_connections_removed": self.stats["stale_connections_removed"],
+            # SSE metrics for observability
+            "sse_subscribers": sse_metrics["active_subscribers"],
+            "sse_total_drops": sse_metrics["total_drops"],
+            "sse_max_subscriber_drops": sse_metrics["max_subscriber_drops"],
+            "sse_min_subscriber_drops": sse_metrics["min_subscriber_drops"],
         }
 
     def get_stats(self) -> dict[str, Any]:
         """Get comprehensive statistics."""
         self.stats["current_connections"] = len(self._connections)
         return self.stats.copy()
+
+    async def periodic_cleanup(self) -> None:
+        """
+        Run periodic maintenance tasks to prevent memory leaks.
+
+        This should be called periodically (e.g., every 5-10 minutes)
+        to clean up stale connections and reset counters.
+        """
+        # Track cleanup runs for observability
+        self.stats["cleanup_runs"] += 1
+
+        stale_removed = await self.cleanup_stale_connections()
+
+        # Log cleanup results for observability
+        if stale_removed > 0:
+            self.logger.info(f"Periodic cleanup removed {stale_removed} stale connections")
+        else:
+            self.logger.debug("Periodic cleanup completed - no stale connections found")
+
+        # Reset event counter if it gets too large to prevent overflow
+        if self._event_count > 1000000:
+            self._event_count = 0
+            self.logger.info("Reset event counter to prevent overflow")
+
+    async def periodic_cleanup_loop(self) -> None:
+        """
+        Background task that runs periodic cleanup every 5 minutes.
+
+        This should be started as a background task during application startup.
+        """
+        while True:
+            try:
+                await asyncio.sleep(300)  # 5 minutes
+                await self.periodic_cleanup()
+            except asyncio.CancelledError:
+                # Log cancellation and exit loop cleanly to avoid noisy tracebacks
+                self.logger.info("Periodic cleanup loop cancelled, shutting down")
+                break
+            except Exception as e:
+                self.logger.error(f"Error during periodic cleanup: {e}")
+                # Continue the loop even if cleanup fails
+
+    # SSE integration API for external modules
+    def get_sse_broker(self) -> "SSEBroker":
+        return self._sse_broker
+
+
+class SSEBroker:
+    """Simple broker to fan-out server events to SSE subscribers."""
+
+    def __init__(self) -> None:
+        self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
+        self._lock = asyncio.Lock()
+        # Drop metrics for observability
+        self._total_drops = 0
+        self._subscriber_drops: dict[int, int] = {}
+
+    async def subscribe(self) -> asyncio.Queue[dict[str, Any]]:
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=100)
+        async with self._lock:
+            self._subscribers.add(queue)
+            # Initialize drop counter for this subscriber
+            self._subscriber_drops[id(queue)] = 0
+        return queue
+
+    async def unsubscribe(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
+        async with self._lock:
+            self._subscribers.discard(queue)
+            # Clean up drop counter for this subscriber
+            self._subscriber_drops.pop(id(queue), None)
+
+    async def publish(self, event: dict[str, Any]) -> None:
+        async with self._lock:
+            subscribers = list(self._subscribers)
+        for q in subscribers:
+            try:
+                # Drop oldest if full to avoid blocking
+                if q.full():
+                    _ = q.get_nowait()
+                    # Track drop metrics
+                    queue_id = id(q)
+                    self._subscriber_drops[queue_id] = self._subscriber_drops.get(queue_id, 0) + 1
+                    self._total_drops += 1
+                q.put_nowait(event)
+            except Exception:
+                # Ignore individual subscriber errors
+                pass
+
+    def get_drop_metrics(self) -> dict[str, Any]:
+        """
+        Get SSE queue drop metrics for observability.
+
+        Returns:
+            Dictionary containing drop statistics
+        """
+        return {
+            "total_drops": self._total_drops,
+            "active_subscribers": len(self._subscribers),
+            "subscriber_drop_counts": list(self._subscriber_drops.values()),
+            "max_subscriber_drops": max(self._subscriber_drops.values()) if self._subscriber_drops else 0,
+            "min_subscriber_drops": min(self._subscriber_drops.values()) if self._subscriber_drops else 0,
+        }
+
+    def get_subscriber_count(self) -> int:
+        """Get current number of SSE subscribers."""
+        return len(self._subscribers)
 
 
 # Global WebSocket manager instance

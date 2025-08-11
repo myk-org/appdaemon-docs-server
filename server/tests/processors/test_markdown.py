@@ -34,9 +34,9 @@ class TestMarkdownProcessor:
         assert processor.md is not None
         assert processor._cache == {}
         assert processor._max_cache_size == 128
-        assert processor._access_order == []
+        # Access order list removed; LRU is handled by OrderedDict move_to_end
 
-    def test_process_file_basic(self, processor, temp_markdown_file):
+    def test_process_file_happy_path(self, processor, temp_markdown_file):
         """Test basic markdown file processing."""
         result = processor.process_file(temp_markdown_file, 123)
 
@@ -51,13 +51,13 @@ class TestMarkdownProcessor:
         # First call
         result1 = processor.process_file(temp_markdown_file, 123)
         assert len(processor._cache) == 1
-        assert len(processor._access_order) == 1
+        # Internal access order list removed in implementation
 
         # Second call with same hash should use cache
         result2 = processor.process_file(temp_markdown_file, 123)
         assert result1 == result2
         assert len(processor._cache) == 1
-        assert len(processor._access_order) == 1
+        # Internal access order list removed in implementation
 
     def test_process_file_cache_invalidation(self, processor, temp_markdown_file):
         """Test that different content hashes invalidate cache."""
@@ -106,7 +106,7 @@ class TestMarkdownProcessor:
 
     def test_process_file_not_found(self, processor):
         """Test processing non-existent file raises appropriate error."""
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(ValueError, match="Cannot access file"):
             processor.process_file("/nonexistent/file.md", 123)
 
     def test_process_file_permission_error(self, processor):
@@ -170,7 +170,7 @@ class TestMarkdownProcessor:
     def test_process_file_logging_on_error(self, processor):
         """Test that errors are properly logged."""
         with patch("server.processors.markdown.logger") as mock_logger:
-            with pytest.raises(FileNotFoundError):
+            with pytest.raises(ValueError, match="Cannot access file"):
                 processor.process_file("/nonexistent/file.md", 123)
 
             mock_logger.error.assert_called_once()

@@ -120,7 +120,7 @@ class TestDocumentationService:
                     mock_logger.debug.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_extract_title_with_header(self, service):
+    async def test_extract_title_when_header_present(self, service):
         """Test extracting title from file with H1 header."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write("# Main Title\n\nSome content\n## Subtitle")
@@ -133,7 +133,7 @@ class TestDocumentationService:
             os.unlink(temp_path)
 
     @pytest.mark.asyncio
-    async def test_extract_title_no_header(self, service):
+    async def test_extract_title_when_no_header(self, service):
         """Test extracting title from file without H1 header."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write("Just some content\nNo headers here")
@@ -148,7 +148,7 @@ class TestDocumentationService:
             os.unlink(temp_path)
 
     @pytest.mark.asyncio
-    async def test_extract_title_header_after_limit(self, service):
+    async def test_extract_title_when_header_after_limit(self, service):
         """Test extracting title when header appears after line limit."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             # Write more than 10 lines before header
@@ -166,14 +166,14 @@ class TestDocumentationService:
             os.unlink(temp_path)
 
     @pytest.mark.asyncio
-    async def test_extract_title_file_error(self, service):
+    async def test_extract_title_when_file_open_raises(self, service):
         """Test extracting title when file cannot be read."""
         nonexistent_file = Path("/nonexistent/file.md")
         title = await service.extract_title(nonexistent_file)
         assert title == "File"
 
     @pytest.mark.asyncio
-    async def test_extract_title_unicode(self, service):
+    async def test_extract_title_with_unicode_characters(self, service):
         """Test extracting title with unicode characters."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as f:
             f.write("# Unicode Title 🚀 with café\n\nContent")
@@ -262,7 +262,7 @@ class TestDocumentationService:
             mock_logger.error.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_title_extraction_constants(self, service):
+    async def test_extract_title_handles_constants_fallback(self, service):
         """Test that title extraction respects defined constants."""
         from server.services.docs import TITLE_EXTRACTION_MAX_LINES
 

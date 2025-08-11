@@ -167,6 +167,7 @@ class TestGetEnvironmentConfig:
                 "watch_max_retries": 3,
                 "watch_force_regenerate": False,
                 "watch_log_level": "INFO",
+                "markdown_cache_size": 128,
             }
 
             assert config == expected
@@ -180,6 +181,7 @@ class TestGetEnvironmentConfig:
             "WATCH_MAX_RETRIES": "10",
             "WATCH_FORCE_REGENERATE": "yes",
             "WATCH_LOG_LEVEL": "DEBUG",
+            "MARKDOWN_CACHE_SIZE": "256",
         }
 
         with patch.dict(os.environ, env_vars):
@@ -192,6 +194,7 @@ class TestGetEnvironmentConfig:
                 "watch_max_retries": 10,
                 "watch_force_regenerate": True,
                 "watch_log_level": "DEBUG",
+                "markdown_cache_size": 256,
             }
 
             assert config == expected
@@ -211,6 +214,7 @@ class TestGetEnvironmentConfig:
             # Other values should be defaults
             assert config["enable_file_watcher"] is True
             assert config["watch_max_retries"] == 3
+            assert config["markdown_cache_size"] == 128
 
 
 class TestGetServerConfig:
@@ -334,7 +338,7 @@ class TestDirectoryStatus:
 class TestPrintStartupInfo:
     """Test cases for print_startup_info function."""
 
-    def test_print_startup_info_basic(self, capsys):
+    def test_print_startup_info_happy_path(self, capsys):
         """Test basic startup info printing."""
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -354,6 +358,10 @@ class TestPrintStartupInfo:
                 "force_regenerate": False,
                 "enable_file_watcher": True,
                 "watch_debounce_delay": 2.0,
+                "watch_max_retries": 3,
+                "watch_force_regenerate": False,
+                "watch_log_level": "INFO",
+                "markdown_cache_size": 128,
             }
 
             print_startup_info(dir_status, server_config, env_config)
@@ -371,7 +379,15 @@ class TestPrintStartupInfo:
 
         dir_status = DirectoryStatus(apps_dir, docs_dir)
         server_config = {"host": "127.0.0.1", "port": 8080, "reload": True, "log_level": "info"}
-        env_config = {"force_regenerate": False, "enable_file_watcher": True, "watch_debounce_delay": 2.0}
+        env_config = {
+            "force_regenerate": False,
+            "enable_file_watcher": True,
+            "watch_debounce_delay": 2.0,
+            "watch_max_retries": 3,
+            "watch_force_regenerate": False,
+            "watch_log_level": "INFO",
+            "markdown_cache_size": 128,
+        }
 
         print_startup_info(dir_status, server_config, env_config)
 
@@ -392,7 +408,15 @@ class TestPrintStartupInfo:
 
                 dir_status = DirectoryStatus(apps_dir, docs_dir)
                 server_config = {"host": "127.0.0.1", "port": 8080, "reload": True, "log_level": "info"}
-                env_config = {"force_regenerate": False, "enable_file_watcher": True, "watch_debounce_delay": 2.0}
+                env_config = {
+                    "force_regenerate": False,
+                    "enable_file_watcher": True,
+                    "watch_debounce_delay": 2.0,
+                    "watch_max_retries": 3,
+                    "watch_force_regenerate": False,
+                    "watch_log_level": "INFO",
+                    "markdown_cache_size": 128,
+                }
 
                 print_startup_info(dir_status, server_config, env_config)
 

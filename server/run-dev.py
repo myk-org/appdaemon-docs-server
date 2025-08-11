@@ -43,16 +43,10 @@ def run_container() -> None:
         print("💡 APPS_DIR is required for container to access AppDaemon apps")
         sys.exit(1)
 
-    apps_path = Path(apps_dir).resolve()
+    apps_path = Path(os.path.expandvars(os.path.expanduser(apps_dir))).resolve()
 
-    # Validate apps_path is within project boundaries to prevent directory traversal
-    try:
-        apps_path.relative_to(project_root)
-    except ValueError:
-        print("❌ Error: Apps directory must be within project root for security")
-        print(f"   Project root: {project_root}")
-        print(f"   Apps path: {apps_path}")
-        sys.exit(1)
+    # Note: Apps directory can be anywhere on the system for flexibility
+    # No path restrictions enforced - allows documentation of external AppDaemon installations
 
     if not apps_path.exists():
         print(f"⚠️  Warning: Apps directory does not exist: {apps_path}")
@@ -105,9 +99,8 @@ def run_container() -> None:
 
 
 def run_local_python() -> None:
-    """Run the development server with local Python."""
+    """Run the development server with local Python (with auto-reload)."""
     env_file = validate_env_file()
-    project_root = env_file.parent
 
     # Load environment variables from .dev_env
     load_dotenv(env_file)
@@ -125,20 +118,28 @@ def run_local_python() -> None:
             print(f"   - {var}")
         sys.exit(1)
 
-    # Validate apps directory path for security
+    # Get apps directory path (can be anywhere on the system)
     apps_dir = os.environ["APPS_DIR"]
-    apps_path = Path(apps_dir).resolve()
+    apps_path = Path(os.path.expandvars(os.path.expanduser(apps_dir))).resolve()
 
-    try:
-        apps_path.relative_to(project_root)
-    except ValueError:
-        print("❌ Error: Apps directory must be within project root for security")
-        print(f"   Project root: {project_root}")
-        print(f"   Apps path: {apps_path}")
-        sys.exit(1)
+    # Note: No path restrictions - allows documentation of external AppDaemon installations
 
     print(f"📂 Apps directory: {apps_path}")
-    print(f"🌐 Server will be available at: http://{os.environ['HOST']}:{os.environ['PORT']}")
+    host = os.environ["HOST"]
+    # Validate PORT is an integer and within valid range
+    raw_port = os.environ["PORT"]
+    try:
+        port = int(raw_port)
+    except ValueError:
+        print(f"❌ Error: Invalid PORT value '{raw_port}'. PORT must be an integer between 1 and 65535.")
+        print("💡 Update the PORT value in your .dev_env file and try again.")
+        sys.exit(1)
+
+    if not (0 < port < 65536):
+        print(f"❌ Error: PORT {port} is out of range. PORT must be between 1 and 65535.")
+        print("💡 Update the PORT value in your .dev_env file and try again.")
+        sys.exit(1)
+    print(f"🌐 Server will be available at: http://{host}:{port}")
     print()
 
     if apps_path.exists():
@@ -147,9 +148,44 @@ def run_local_python() -> None:
         print("⚠️  Apps directory not found - create it and add AppDaemon files")
     print()
 
-    from server.main import main as server_main
+    # Prefer invoking uvicorn via subprocess with --reload; this uses the
+    # reloader supervisor which is more reliable than in-process reload.
+    project_root = env_file.parent
+    reload_dirs = [
+        str(project_root / "server"),
+        str(project_root / "server" / "templates"),
+        str(project_root / "server" / "static"),
+    ]
 
-    server_main()
+    cmd = [
+        sys.executable,
+        "-m",
+        "uvicorn",
+        "server.main:app",
+        "--host",
+        host,
+        "--port",
+        str(port),
+        "--reload",
+    ]
+    for d in reload_dirs:
+        cmd.extend(["--reload-dir", d])
+
+    # Exclude tests from triggering reloads during development
+    cmd.extend([
+        "--reload-exclude",
+        str(project_root / "server" / "tests"),
+    ])
+
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        print("❌ Failed to start dev server (uvicorn).")
+        print(f"   Exit code: {e.returncode}")
+        print("💡 Check your .dev_env settings, port availability, and app imports.")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        print("\n🛑 Stopping dev server...")
 
 
 def main() -> None:

@@ -15,6 +15,7 @@ commands = [
 [env.unittests]
 deps = ["uv"]
 commands = [
+  # Single run: pytest-cov uses coverage settings from pyproject; generate term + html reports once
   [
     "uv",
     "run",
@@ -22,10 +23,10 @@ commands = [
     "tests",
     "pytest",
     "server/tests/",
-    "--cov=server",
-    "--cov-report=html",
-    "--cov-report=term-missing",
     "-n",
     "auto",
+    "--cov",
+    "--cov-report=term-missing",
+    "--cov-report=html",
   ],
 ]
