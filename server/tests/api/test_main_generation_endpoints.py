@@ -28,7 +28,31 @@ def client():
 
 
 def test_generate_all_uses_batch_when_no_watcher(client):
-    with patch("server.main.file_watcher", None), patch("server.main.BatchDocGenerator") as gen_cls:
+    from pathlib import Path
+    from unittest.mock import MagicMock
+
+    # Mock APPS_DIR.exists() to return True specifically
+    mock_apps_dir = MagicMock(spec=Path)
+    mock_apps_dir.exists.return_value = True
+
+    # Mock DOCS_DIR and the README.md file writing
+    mock_docs_dir = MagicMock(spec=Path)
+    mock_readme_path = MagicMock(spec=Path)
+    mock_docs_dir.__truediv__.return_value = mock_readme_path
+    mock_readme_path.write_text.return_value = None
+
+    with (
+        patch("server.main.file_watcher", None),
+        patch("server.main.BatchDocGenerator") as gen_cls,
+        patch("server.main.APPS_DIR", mock_apps_dir),
+        patch("server.main.DOCS_DIR", mock_docs_dir),
+        patch("server.main.websocket_manager") as mock_ws_manager,
+    ):
+        # Mock the websocket manager's broadcast method to be async
+        from unittest.mock import AsyncMock
+
+        mock_ws_manager.broadcast_batch_status = AsyncMock(return_value=None)
+
         gen = Mock()
         gen.generate_all_docs.return_value = {
             "total_files": 1,

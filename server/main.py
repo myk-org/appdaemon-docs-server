@@ -454,44 +454,120 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         # Copy AppDaemon source files for read-only viewing
         try:
-            # Create a clean mirror: remove files in APP_SOURCES_DIR that no longer exist in APPS_DIR
+            # Performance optimization: quick mtime check on directory roots for large trees
+            skip_sync = False
             try:
-                source_rel_paths = set()
-                for s in REAL_APPS_DIR.rglob("*.py"):
-                    try:
-                        source_rel_paths.add(str(s.relative_to(REAL_APPS_DIR)))
-                    except ValueError:
-                        source_rel_paths.add(s.name)
+                if REAL_APPS_DIR.exists() and MIRRORED_APPS_DIR.exists():
+                    # Get the newest mtime from the source directory (including subdirectories)
+                    source_newest_mtime = 0.0
+                    for root, dirs, files in os.walk(REAL_APPS_DIR):
+                        root_path = Path(root)
+                        try:
+                            root_mtime = root_path.stat().st_mtime
+                            source_newest_mtime = max(source_newest_mtime, root_mtime)
+                            # Check all Python files in this directory
+                            for file in files:
+                                if file.endswith(".py"):
+                                    file_path = root_path / file
+                                    try:
+                                        file_mtime = file_path.stat().st_mtime
+                                        source_newest_mtime = max(source_newest_mtime, file_mtime)
+                                    except (OSError, IOError):
+                                        # If we can't stat a file, force full sync
+                                        source_newest_mtime = float("inf")
+                                        break
+                        except (OSError, IOError):
+                            # If we can't stat the directory, force full sync
+                            source_newest_mtime = float("inf")
+                            break
 
-                if MIRRORED_APPS_DIR.exists():
-                    for existing in MIRRORED_APPS_DIR.rglob("*.py"):
-                        rel_existing = str(existing.relative_to(MIRRORED_APPS_DIR))
-                        if rel_existing not in source_rel_paths:
+                        if source_newest_mtime == float("inf"):
+                            break
+
+                    # Get the oldest mtime from the mirrored directory (including subdirectories)
+                    mirror_oldest_mtime = float("inf")
+                    if source_newest_mtime != float("inf"):
+                        for root, dirs, files in os.walk(MIRRORED_APPS_DIR):
+                            root_path = Path(root)
                             try:
-                                existing.unlink()
-                            except Exception as de:
-                                logger.debug(f"Skip deleting stale mirror file {existing}: {de}")
-            except Exception as cleanup_err:
-                logger.debug(f"Mirror cleanup skipped due to error: {cleanup_err}")
+                                root_mtime = root_path.stat().st_mtime
+                                mirror_oldest_mtime = min(mirror_oldest_mtime, root_mtime)
+                                # Check all Python files in this directory
+                                for file in files:
+                                    if file.endswith(".py"):
+                                        file_path = root_path / file
+                                        try:
+                                            file_mtime = file_path.stat().st_mtime
+                                            mirror_oldest_mtime = min(mirror_oldest_mtime, file_mtime)
+                                        except (OSError, IOError):
+                                            # If we can't stat a file, force full sync
+                                            mirror_oldest_mtime = 0.0
+                                            break
+                            except (OSError, IOError):
+                                # If we can't stat the directory, force full sync
+                                mirror_oldest_mtime = 0.0
+                                break
+
+                            if mirror_oldest_mtime == 0.0:
+                                break
+
+                    # If mirror is newer than or equal to source, skip expensive recursive operations
+                    if (
+                        source_newest_mtime != float("inf")
+                        and mirror_oldest_mtime != float("inf")
+                        and mirror_oldest_mtime >= source_newest_mtime
+                    ):
+                        skip_sync = True
+                        logger.debug(
+                            f"Skipping app source sync - mirror is up to date (source: {source_newest_mtime}, mirror: {mirror_oldest_mtime})"
+                        )
+            except Exception as mtime_check_err:
+                logger.debug(f"Mtime optimization check failed, proceeding with full sync: {mtime_check_err}")
+                skip_sync = False
 
             copied = 0
-            for src in REAL_APPS_DIR.rglob("*.py"):
-                # Preserve relative structure
+            if not skip_sync:
+                # Create a clean mirror: remove files in APP_SOURCES_DIR that no longer exist in APPS_DIR
                 try:
-                    rel = src.relative_to(REAL_APPS_DIR)
-                except ValueError:
-                    # If outside APPS_DIR (shouldn't happen), flatten
-                    rel = Path(src.name)
-                dest = MIRRORED_APPS_DIR / rel
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                # Always copy latest (overwrite if equal or newer)
-                try:
-                    if not dest.exists() or src.stat().st_mtime >= dest.stat().st_mtime:
-                        shutil.copy2(src, dest)
-                        copied += 1
-                except Exception as ce:
-                    logger.debug(f"Skip copying {src}: {ce}")
-            logger.info(f"📄 Prepared {copied} AppDaemon source file(s) for read-only viewing")
+                    source_rel_paths = set()
+                    for s in REAL_APPS_DIR.rglob("*.py"):
+                        try:
+                            source_rel_paths.add(str(s.relative_to(REAL_APPS_DIR)))
+                        except ValueError:
+                            source_rel_paths.add(s.name)
+
+                    if MIRRORED_APPS_DIR.exists():
+                        for existing in MIRRORED_APPS_DIR.rglob("*.py"):
+                            rel_existing = str(existing.relative_to(MIRRORED_APPS_DIR))
+                            if rel_existing not in source_rel_paths:
+                                try:
+                                    existing.unlink()
+                                except Exception as de:
+                                    logger.debug(f"Skip deleting stale mirror file {existing}: {de}")
+                except Exception as cleanup_err:
+                    logger.debug(f"Mirror cleanup skipped due to error: {cleanup_err}")
+
+                for src in REAL_APPS_DIR.rglob("*.py"):
+                    # Preserve relative structure
+                    try:
+                        rel = src.relative_to(REAL_APPS_DIR)
+                    except ValueError:
+                        # If outside APPS_DIR (shouldn't happen), flatten
+                        rel = Path(src.name)
+                    dest = MIRRORED_APPS_DIR / rel
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    # Always copy latest (overwrite if equal or newer)
+                    try:
+                        if not dest.exists() or src.stat().st_mtime >= dest.stat().st_mtime:
+                            shutil.copy2(src, dest)
+                            copied += 1
+                    except Exception as ce:
+                        logger.debug(f"Skip copying {src}: {ce}")
+
+            status_msg = f"📄 Prepared {copied} AppDaemon source file(s) for read-only viewing"
+            if skip_sync:
+                status_msg += " (optimized - no changes detected)"
+            logger.info(status_msg)
         except Exception as copy_err:
             logger.warning(f"Failed to prepare app sources for viewing: {copy_err}")
 
@@ -833,6 +909,9 @@ async def list_app_sources() -> AppSourceListResponse:
                 if EXPOSE_ABS_PATHS_IN_API:
                     info_kwargs["abs_path"] = str(py.resolve())
                 apps.append(AppSourceInfo(**info_kwargs))
+
+        # Sort apps by module name for deterministic ordering
+        apps.sort(key=lambda app: app.module)
     except Exception as e:
         logger.warning(f"Error listing app sources: {e}")
     return AppSourceListResponse(apps=apps, total_count=len(apps))
@@ -952,9 +1031,9 @@ async def documentation_index(request: Request) -> HTMLResponse:
         filtered_files = [f for f in files if str(f.get("stem")) in active_modules_set]
 
         return templates.TemplateResponse(
-            request,
             "index.html",
             {
+                "request": request,
                 "title": "AppDaemon Documentation",
                 "files": filtered_files,  # Default to active modules for initial load
                 "all_files": files,  # Provide all files for client-side filtering
@@ -990,9 +1069,9 @@ async def documentation_file(request: Request, filename: str) -> HTMLResponse:
         html_content, title = await docs_service.get_file_content(filename)
 
         return templates.TemplateResponse(
-            request,
             "document.html",
             {
+                "request": request,
                 "title": title,
                 "content": html_content,
                 "filename": filename,
@@ -1331,7 +1410,16 @@ async def trigger_single_file_generation(filename: str, force: bool = False) -> 
         # Use APPS_DIR for compatibility with tests that patch it
         file_path = APPS_DIR / filename
 
-        if not file_path.exists():
+        # Security: Validate path to prevent directory traversal attacks
+        try:
+            resolved_path = file_path.resolve()
+            # Ensure the resolved path is within APPS_DIR
+            resolved_path.relative_to(APPS_DIR.resolve())
+        except ValueError:
+            # Path is outside APPS_DIR - potential path traversal attack
+            raise HTTPException(status_code=400, detail=f"Invalid file path: {filename}") from None
+
+        if not resolved_path.exists():
             raise HTTPException(status_code=404, detail=f"File not found: {filename}")
 
         logger.info(f"Manual single file generation triggered for {filename} (force={force})")
@@ -1339,7 +1427,7 @@ async def trigger_single_file_generation(filename: str, force: bool = False) -> 
         # Create batch generator and generate for single file
         batch_generator = BatchDocGenerator(APPS_DIR, DOCS_DIR)
 
-        output_file = DOCS_DIR / f"{file_path.stem}.md"
+        output_file = DOCS_DIR / f"{resolved_path.stem}.md"
 
         # Check if should skip
         if not force and output_file.exists():
@@ -1354,11 +1442,11 @@ async def trigger_single_file_generation(filename: str, force: bool = False) -> 
         await websocket_manager.broadcast_batch_status(
             EventType.DOC_GENERATION_STARTED,
             f"Generating documentation for {filename}",
-            {"file_path": str(file_path), "current_file": filename, "trigger": "manual"},
+            {"file_path": str(resolved_path), "current_file": filename, "trigger": "manual"},
         )
 
         # Generate documentation
-        docs, success = batch_generator.generate_single_file_docs(file_path)
+        docs, success = batch_generator.generate_single_file_docs(resolved_path)
 
         if success:
             # Write to output file
@@ -1367,7 +1455,7 @@ async def trigger_single_file_generation(filename: str, force: bool = False) -> 
             await websocket_manager.broadcast_batch_status(
                 EventType.DOC_GENERATION_COMPLETED,
                 f"Successfully generated documentation for {filename}",
-                {"file_path": str(file_path), "output_path": str(output_file), "current_file": filename},
+                {"file_path": str(resolved_path), "output_path": str(output_file), "current_file": filename},
             )
 
             return {
@@ -1380,7 +1468,7 @@ async def trigger_single_file_generation(filename: str, force: bool = False) -> 
             error_msg = f"Generation failed for {filename}"
 
             await websocket_manager.broadcast_batch_status(
-                EventType.DOC_GENERATION_ERROR, error_msg, {"file_path": str(file_path), "current_file": filename}
+                EventType.DOC_GENERATION_ERROR, error_msg, {"file_path": str(resolved_path), "current_file": filename}
             )
 
             raise HTTPException(status_code=500, detail=error_msg)

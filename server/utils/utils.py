@@ -129,6 +129,10 @@ def count_active_apps(
         with open(apps_yaml_path, "r", encoding="utf-8") as f:
             apps_config = yaml.safe_load(f)
 
+        # Treat empty YAML (None) as empty mapping
+        if apps_config is None:
+            apps_config = {}
+
         # Validate that YAML loaded content is a dictionary
         if not isinstance(apps_config, dict):
             # Security: Don't log YAML content as it may contain PII/secrets
@@ -276,8 +280,15 @@ def _check_external_apps_dir(apps_dir: Path) -> tuple[bool, bool]:
                     is_readonly = True
 
         return is_external, is_readonly
-    except Exception:
+    except Exception as e:
         # If any error occurs, assume safe defaults
+        # Log exception details for ops triage while maintaining current behavior
+        logging.getLogger(__name__).debug(
+            "Exception during directory check for %s: %s (%s). Returning safe defaults (False, False).",
+            apps_dir,
+            str(e),
+            type(e).__name__,
+        )
         return False, False
 
 

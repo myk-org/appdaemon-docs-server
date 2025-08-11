@@ -29,13 +29,22 @@ def client():
 
 def test_health_starting_status(client):
     # Not completed, apps dir exists -> starting
+    from pathlib import Path
+    from unittest.mock import MagicMock
+
+    # Mock REAL_APPS_DIR.exists() to return True specifically
+    mock_real_apps_dir = MagicMock(spec=Path)
+    mock_real_apps_dir.exists.return_value = True
+
     with (
         patch("server.main.startup_generation_completed", False),
         patch("server.main.startup_errors", []),
+        patch("server.main.REAL_APPS_DIR", mock_real_apps_dir),
     ):
         r = client.get("/health")
         assert r.status_code == 200
-        assert r.json()["status"] == "starting"
+        response_data = r.json()
+        assert response_data["status"] == "starting"
 
 
 def test_pygments_css_error_path(client):
