@@ -1,5 +1,5 @@
 # Multi-stage build for optimized production image
-FROM python:3.12-slim as builder
+FROM python:3.14-slim as builder
 
 # Set environment variables for UV
 ENV UV_GLOBAL_DIR=/app/.uv
@@ -19,7 +19,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
 # Production stage
-FROM python:3.12-slim as production
+FROM python:3.14-slim as production
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
